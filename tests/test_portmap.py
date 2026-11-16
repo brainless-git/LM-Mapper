@@ -320,3 +320,42 @@ def test_pull_configs_from_lm(tmp_path):
     # LM only: file configs are ignored
     s.config_source = "lm"
     assert [x["hostname"] for x in build_report(s, lm).switches] == ["EDGE-SW02"]
+
+
+# -- short-name links (site naming like 'TRUNK SW02/P47') ----------------------
+
+def _procurve(name, ports):
+    lines = [f'; J9773A Configuration Editor; Created on release #YA.16.10', f'hostname "{name}"']
+    for p, desc in ports.items():
+        lines += [f"interface {p}", f'   name "{desc}"', "   exit"]
+    lines += ['vlan 1', '   name "DEFAULT_VLAN"', f'   untagged {",".join(ports)}', '   exit',
+              'vlan 10', '   name "DATA"', f'   tagged {",".join(ports)}', '   exit']
+    return "\n".join(lines) + "\n"
+
+
+def test_short_name_links(tmp_path):
+    site = tmp_path / "Turrella"
+    site.mkdir()
+    (site / "sw01.cfg").write_text(_procurve("SVG-TUR-SW01", {"47": "UPLINK TO FORTIGATE", "48": "TRUNK SW02/P47"}))
+    (site / "sw02.cfg").write_text(_procurve("SVG-TUR-SW02", {"46": "TRUNK SW8/P23", "47": "TRUNK SW1/P48",
+                                                              "8": "SVG-TUR-WAP01"}))
+    (site / "sw08.cfg").write_text(_procurve("SVG-TUR-SW08", {"23": "TRUNK SW02/P46"}))
+    (site / "utm01.conf").write_text("#config-version=FGT60F-7.2.8\nconfig system global\n    set hostname \"SVG-TUR-UTM01\"\nend\n"
+                                     "config system interface\n    edit \"internal1\"\n        set type physical\n    next\nend\n"
+                                     "config firewall policy\nend\n")
+    # same short names at another site must not cross-link
+    other = tmp_path / "Other"
+    other.mkdir()
+    (other / "sw02.cfg").write_text(_procurve("ABC-XYZ-SW02", {"1": "TRUNK SW01/P1"}))
+    s = Settings()
+    s.config_dir, s.mapping_file, s.data_dir = str(tmp_path), "/nonexistent", str(tmp_path / "d")
+    rep = build_report(s, None)
+    topo = rep.topology["sites"]["Turrella"]
+    names = {d["id"]: d["hostname"] for d in topo["devices"]}
+    links = {frozenset([(names[l["a"]], l["a_port"]), (names[l["b"]], l["b_port"])]): l for l in topo["links"]}
+    assert frozenset([("SVG-TUR-SW01", "48"), ("SVG-TUR-SW02", "47")]) in links
+    assert links[frozenset([("SVG-TUR-SW01", "48"), ("SVG-TUR-SW02", "47")])]["sources"] == ["description"]
+    assert frozenset([("SVG-TUR-SW02", "46"), ("SVG-TUR-SW08", "23")]) in links
+    assert frozenset([("SVG-TUR-SW01", "47"), ("SVG-TUR-UTM01", None)]) in links
+    assert len(topo["links"]) == 3
+    assert rep.topology["sites"]["Other"]["links"] == []

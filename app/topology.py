@@ -24,18 +24,41 @@ PALETTE_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#0ca30c"
 OTHER_LIGHT, OTHER_DARK = "#a3a29c", "#6b6a64"
 
 
+FIREWALL_WORDS = r"fortigate|firewall|fgt|utm|fw|palo|sophos|checkpoint|check point|asa"
+
+
+def _short_aliases(hostname: str) -> set[str]:
+    """'SVG-TUR-SW02' -> {'sw02', 'sw2'}: the last name segment with and without zero padding."""
+    seg = re.split(r"[-_.\s]+", hostname.strip().lower())[-1]
+    m = re.fullmatch(r"([a-z]+)0*(\d+)", seg)
+    if not m:
+        return {seg} if len(seg) >= 3 else set()
+    letters, num = m.group(1), m.group(2)
+    return {seg, f"{letters}{num}", f"{letters}{int(num):02d}", f"{letters}{int(num):03d}"}
+
+
 class DeviceIndex:
-    """Resolve free-text names (hostnames, FQDNs, serials, aliases) to devices."""
+    """Resolve free-text names (hostnames, FQDNs, serials, aliases, short site names) to devices."""
 
     def __init__(self, devices: list[SwitchConfig], aliases: dict[str, list[str]]):
         self.by_id = {d.switch_id: d for d in devices}
         self.names: dict[str, str] = {}
+        self.short: dict[str, dict[str, str]] = defaultdict(dict)   # site -> short alias -> device
+        self.firewalls: dict[str, list[str]] = defaultdict(list)    # site -> firewall device ids
         for d in devices:
             for n in [d.hostname, d.serial, *aliases.get(d.hostname.lower(), []),
                       *aliases.get((d.serial or "").lower(), [])]:
                 if n:
                     self.names.setdefault(n.lower(), d.switch_id)
                     self.names.setdefault(n.lower().split(".")[0], d.switch_id)
+            for a in _short_aliases(d.hostname):
+                # an alias shared by two devices in one site is ambiguous: drop it
+                if a in self.short[d.site] and self.short[d.site][a] != d.switch_id:
+                    self.short[d.site][a] = ""
+                else:
+                    self.short[d.site][a] = d.switch_id
+            if d.role == "firewall":
+                self.firewalls[d.site].append(d.switch_id)
 
     def resolve(self, name: str) -> str | None:
         if not name:
@@ -44,16 +67,32 @@ class DeviceIndex:
         n = re.sub(r"\(.*\)$", "", n)            # CDP 'SW1(FOC123)'
         return self.names.get(n) or self.names.get(n.split(".")[0])
 
-    def find_in_text(self, text: str, exclude: str) -> tuple[str, int] | None:
-        """Longest device name appearing as a whole token in text -> (device_id, end offset)."""
-        best = None
-        low = (text or "").lower()
-        for name, dev in self.names.items():
-            if dev == exclude or len(name) < 4:
+    @staticmethod
+    def _scan(names: dict[str, str], low: str, exclude: str, min_len: int, best):
+        for name, dev in names.items():
+            if not dev or dev == exclude or len(name) < min_len:
                 continue
             for m in re.finditer(r"(?<![a-z0-9])" + re.escape(name) + r"(?![a-z0-9])", low):
                 if best is None or len(name) > best[2]:
                     best = (dev, m.end(), len(name))
+        return best
+
+    def find_in_text(self, text: str, exclude: str, site: str = "default") -> tuple[str, int] | None:
+        """Device named in text -> (device_id, end offset of the match).
+
+        Full hostnames/serials/aliases win; then short names within the same site
+        ('SW02', 'SW8'); then firewall words ('FortiGate', 'UTM') if the site has one firewall."""
+        low = (text or "").lower()
+        if not low.strip():
+            return None
+        best = self._scan(self.names, low, exclude, 4, None)
+        if best is None:
+            best = self._scan(self.short.get(site, {}), low, exclude, 3, None)
+        if best is None:
+            fws = [f for f in self.firewalls.get(site, []) if f != exclude]
+            m = re.search(r"(?<![a-z0-9])(" + FIREWALL_WORDS + r")(?![a-z0-9])", low)
+            if m and len(fws) == 1:
+                best = (fws[0], m.end(), 0)
         return (best[0], best[1]) if best else None
 
 
@@ -62,17 +101,21 @@ def _port_lookup(dev: SwitchConfig) -> dict:
 
 
 def _peer_port_from_text(text: str, offset: int, dev: SwitchConfig) -> str | None:
-    """Find a port name of dev mentioned after offset in text ('... EDGE-SW02 port 25')."""
-    tail = re.split(r"[\s,;:/()\[\]]+", text[offset:].strip())
-    tail = [t for t in tail if t][:4]
+    """Find a port name of dev mentioned after offset in text.
+
+    Handles 'EDGE-SW02 port 25', 'SW02/P47', 'SW3 Gi1/0/1', 'core 1/1/49'."""
+    rest = text[offset:].strip()
     keys = _port_lookup(dev)
-    cands = []
+    cands = re.findall(r"[A-Za-z\-]*\d+(?:/\d+)+", rest)       # slash names first ('1/1/49', 'Gi1/0/1')
+    tail = [t for t in re.split(r"[\s,;:/()\[\]]+", rest) if t][:4]
     for i, t in enumerate(tail):
         cands.append(t)
         if i + 1 < len(tail):
             cands.append(t + tail[i + 1])
-    # also slash-containing names that the split broke ('1/1/49', 'Gi1/0/1')
-    cands += re.findall(r"[A-Za-z\-]*\d+(?:/\d+)+", text[offset:])
+        m = re.fullmatch(r"(?i)p(?:ort)?[-.#]?(\d+[a-z]?)", t)   # 'P47', 'port25', 'P-3'
+        if m:
+            cands.append(m.group(1))
+            cands.append("port" + m.group(1))
     for c in cands:
         k = normalise_ifname(c)
         if k in keys and keys[k].kind == "physical":
@@ -155,7 +198,7 @@ def discover_links(devices: list[SwitchConfig], neighbours: list[Neighbour], map
                 lags[normalise_ifname(p.lag)].append(p)
         for p in d.ports:
             for text in (p.description, lm_alias.get((d.switch_id, p.key), "")):
-                hit = idx.find_in_text(text, d.switch_id)
+                hit = idx.find_in_text(text, d.switch_id, d.site)
                 if not hit:
                     continue
                 peer = idx.by_id[hit[0]]
