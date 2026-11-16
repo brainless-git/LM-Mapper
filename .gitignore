@@ -1,0 +1,7 @@
+.env
+data/
+configs/
+mapping/mapping.yaml
+__pycache__/
+*.pyc
+.pytest_cache/

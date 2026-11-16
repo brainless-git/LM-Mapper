@@ -1,0 +1,23 @@
+# Optional overrides. Mount at /mapping/mapping.yaml.
+
+# Force a config switch (by config hostname OR serial) to a specific LM device.
+# Only needed when automatic matching on displayName / sysname / hostname / serial fails.
+switches:
+  CORE-SW01:
+    lm_device: "core-sw01.client.local"     # LM displayName or name
+    aliases: [CORE1, "Core Switch"]         # other names used in port descriptions
+  S124FTF21000001:
+    lm_device_id: 1234                      # LM device ID
+
+# Force the parser for a file (path relative to CONFIG_DIR) when auto-detection gets it wrong.
+# Values: cisco_ios | aruba_procurve | aruba_aoscx | fortios
+files:
+  legacy/odd-switch.txt: cisco_ios
+
+# Interface names to leave out of the report (case-insensitive, compared after normalisation).
+ignore_ports:
+  - "__FoRtI1LiNk0__"
+
+# Links that cannot be discovered automatically. a / b = hostname, serial or alias.
+links:
+  - {a: CORE-SW01, a_port: Te1/1/1, b: EDGE-SW02, b_port: "25"}

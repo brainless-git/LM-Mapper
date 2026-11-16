@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}{{ sw.hostname }} · Switchport Map{% endblock %}
+{% block crumbs %}<span class="muted">/ {{ sw.hostname }}</span>{% endblock %}
+{% block content %}
+<p>
+  <strong>{{ sw.hostname }}</strong> ({{ sw.vendor }}{% if sw.serial %}, {{ sw.serial }}{% endif %}) ·
+  LM device: {% if sw.lm_device %}{{ sw.lm_device }} <span class="muted">#{{ sw.lm_device_id }}</span>{% else %}<span class="warn">not matched</span>{% endif %} ·
+  DataSource: {{ sw.lm_datasource or "none" }} · Source: <code>{{ sw.source_file }}</code>
+</p>
+{% if sw.error %}<div class="banner err">{{ sw.error }}</div>{% endif %}
+<div class="toolbar">
+  <input type="search" id="q" placeholder="Filter ports, VLANs, descriptions…" oninput="filterRows(this, document.getElementById('only'))">
+  <label><input type="checkbox" id="only" onchange="filterRows(document.getElementById('q'), this)"> Issues only</label>
+  <a class="btn" href="/topology?site={{ sw.site | urlencode }}">Topology</a>
+  <a class="btn" href="/export.csv?switch={{ sw.switch_id | urlencode }}">Export CSV</a>
+  <a class="btn" href="/api/ports?switch={{ sw.switch_id | urlencode }}">JSON</a>
+</div>
+<table>
+  <thead><tr>
+    <th>Port</th><th>Config description</th><th>LM alias</th><th>Mode</th><th>VLAN</th><th>IP</th><th>LAG / group</th>
+    <th>Config admin</th><th>LM status</th><th>LM instance</th><th>Issues</th>
+  </tr></thead>
+  <tbody>
+  {% for r in rows %}
+    <tr data-issues="{{ 1 if r.issues else 0 }}">
+      <td>{{ r.port }}{% if r.kind == "logical" %} <span class="muted">(logical)</span>{% endif %}{% if not r.in_config %} <span class="pill warn">LM only</span>{% endif %}</td>
+      <td>{{ r.description }}</td>
+      <td>{{ r.lm_alias }}</td>
+      <td>{{ r.mode }}</td>
+      <td>{{ r.vlan }}</td>
+      <td>{{ r.ip }}</td>
+      <td>{{ r.lag or "" }}</td>
+      <td>{% if r.cfg_admin %}<span class="{{ r.cfg_admin }}">{{ r.cfg_admin }}</span>{% endif %}</td>
+      <td>{% if r.lm_oper %}<span class="{{ 'up' if r.lm_oper == 'up' else 'down' }}">{{ r.lm_oper }}</span>{% elif r.lm_instance_id %}<span class="muted">n/a</span>{% endif %}</td>
+      <td>{% if r.lm_instance_id %}{{ r.lm_instance }} <span class="muted">#{{ r.lm_instance_id }}</span>{% endif %}</td>
+      <td>{% if r.issues %}<ul class="issues">{% for i in r.issues %}<li class="{{ i.level }}">{{ i.text }}</li>{% endfor %}</ul>{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

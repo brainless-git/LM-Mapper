@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+{% if not company %}
+<div class="banner">LogicMonitor is not configured. <a href="/settings">Open Settings</a> to add the portal, Bearer token and target group IDs.</div>
+{% endif %}
+{% if report.parse_errors %}
+<div class="banner err"><strong>Files that could not be parsed:</strong>
+  <ul>{% for e in report.parse_errors %}<li><code>{{ e.file }}</code>: {{ e.error }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+<div class="toolbar">
+  <input type="search" placeholder="Filter switches…" oninput="filterRows(this)">
+  <a class="btn" href="/export.csv">Export all (CSV)</a>
+  <a class="btn" href="/api/switches">JSON</a>
+</div>
+<table>
+  <thead><tr>
+    <th>Device</th><th>Site</th><th>Role</th><th>Vendor</th><th>Serial</th><th>LM device</th><th>Interface DataSource</th>
+    <th class="num">Config ports</th><th class="num">Matched in LM</th><th class="num">Ports with warnings</th><th>Source file</th>
+  </tr></thead>
+  <tbody>
+  {% for s in report.switches %}
+    <tr data-issues="{{ 1 if s.issue_count or not s.lm_device_id else 0 }}">
+      <td><a href="/switch/{{ s.switch_id | urlencode }}">{{ s.hostname }}</a></td>
+      <td>{{ s.site }}</td>
+      <td>{{ s.role }}</td>
+      <td>{{ s.vendor }}</td>
+      <td>{{ s.serial or "" }}</td>
+      <td>{% if s.lm_device %}{{ s.lm_device }} <span class="muted">#{{ s.lm_device_id }}</span>{% else %}<span class="warn">not matched</span>{% endif %}
+          {% if s.error %}<div class="down">{{ s.error }}</div>{% endif %}</td>
+      <td>{{ s.lm_datasource or "" }}</td>
+      <td class="num">{{ s.port_count }}</td>
+      <td class="num">{{ s.matched }}</td>
+      <td class="num">{% if s.issue_count %}<span class="warn">{{ s.issue_count }}</span>{% else %}0{% endif %}</td>
+      <td><code>{{ s.source_file }}</code></td>
+    </tr>
+  {% else %}
+    <tr><td colspan="11" class="muted">No switches loaded yet. Check that configs are mounted at the CONFIG_DIR path.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

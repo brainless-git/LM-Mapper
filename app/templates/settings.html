@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}Settings · Switchport Map{% endblock %}
+{% block crumbs %}<span class="muted">/ Settings</span>{% endblock %}
+{% block content %}
+<style>
+  form.settings { max-width:760px; display:grid; gap:14px }
+  fieldset { border:1px solid var(--line); border-radius:8px; padding:12px 16px; background:var(--card) }
+  legend { font-weight:600; padding:0 6px }
+  .field { display:grid; grid-template-columns:200px 1fr; gap:10px; align-items:center; margin:8px 0 }
+  .field input[type=text], .field input[type=password], .field input[type=number] {
+    font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); width:100% }
+  .field input[type=checkbox] { justify-self:start; width:16px; height:16px }
+  .hint { color:var(--muted); font-size:12px; grid-column:2 }
+  #groups-result { margin-top:8px }
+  #groups-result table { font-size:13px }
+  .status { margin-left:10px }
+</style>
+
+<form class="settings" onsubmit="save(event)">
+  <fieldset>
+    <legend>LogicMonitor API</legend>
+    <div class="field"><label for="lm_company">Portal (company)</label>
+      <input type="text" id="lm_company" value="{{ s.lm_company }}" placeholder="quorum">
+      <span class="hint">The part before .logicmonitor.com</span></div>
+    <div class="field"><label for="lm_bearer_token">Bearer token</label>
+      <input type="password" id="lm_bearer_token" autocomplete="off"
+             placeholder="{{ 'Saved (' ~ s.lm_bearer_token_hint ~ '). Leave blank to keep' if s.lm_bearer_token_set else 'Paste bearer token' }}">
+      <span class="hint">Stored in /data/settings.json (mode 600). Never returned by the API.</span></div>
+    <details>
+      <summary class="muted">Use an LMv1 access ID/key instead</summary>
+      <div class="field"><label for="lm_access_id">Access ID</label>
+        <input type="text" id="lm_access_id" value="{{ s.lm_access_id }}"></div>
+      <div class="field"><label for="lm_access_key">Access key</label>
+        <input type="password" id="lm_access_key" autocomplete="off"
+               placeholder="{{ 'Saved. Leave blank to keep' if s.lm_access_key_set else '' }}"></div>
+    </details>
+    <div class="field"><span></span>
+      <span><button type="button" onclick="testConn()">Test connection</button><span id="test-status" class="status"></span></span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Scope (what to ingest)</legend>
+    <div class="field"><label for="lm_group_ids">LM device group IDs</label>
+      <input type="text" id="lm_group_ids" value="{{ s.lm_group_ids | join(', ') }}" placeholder="e.g. 123, 456 (blank = all devices)"></div>
+    <div class="field"><label for="include_subgroups">Include subgroups</label>
+      <input type="checkbox" id="include_subgroups" {% if s.include_subgroups %}checked{% endif %}></div>
+    <div class="field"><label for="hide_unmatched">Hide unmatched configs</label>
+      <input type="checkbox" id="hide_unmatched" {% if s.hide_unmatched %}checked{% endif %}>
+      <span class="hint">When groups are set, only show config devices that matched an LM device in those groups.</span></div>
+    <div class="field"><label for="group-q">Find groups</label>
+      <span><input type="text" id="group-q" placeholder="Name or path, e.g. Clients/St Agnes" style="width:70%">
+      <button type="button" onclick="findGroups()">Search</button></span></div>
+    <div id="groups-result"></div>
+    <div class="field"><label for="lm_device_filter">Extra device filter</label>
+      <input type="text" id="lm_device_filter" value="{{ s.lm_device_filter }}" placeholder='displayName~"-sw"'>
+      <span class="hint">LM REST filter. Only used when no group IDs are set.</span></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Collection</legend>
+    <div class="field"><label for="fetch_status">Fetch port status</label>
+      <input type="checkbox" id="fetch_status" {% if s.fetch_status %}checked{% endif %}>
+      <span class="hint">1 API call per matched port.</span></div>
+    <div class="field"><label for="fetch_alerts">Fetch active alerts</label>
+      <input type="checkbox" id="fetch_alerts" {% if s.fetch_alerts %}checked{% endif %}></div>
+    <div class="field"><label for="refresh_minutes">Auto refresh (minutes)</label>
+      <input type="number" id="refresh_minutes" min="0" value="{{ s.refresh_minutes }}">
+      <span class="hint">0 = manual only.</span></div>
+  </fieldset>
+
+  <div><button type="submit">Save and refresh</button>
+    <button type="button" onclick="clearSecrets()">Clear saved credentials</button>
+    <span id="save-status" class="status"></span></div>
+</form>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function values() {
+  return {
+    lm_company: $("lm_company").value, lm_bearer_token: $("lm_bearer_token").value,
+    lm_access_id: $("lm_access_id").value, lm_access_key: $("lm_access_key").value,
+    lm_group_ids: $("lm_group_ids").value, include_subgroups: $("include_subgroups").checked,
+    hide_unmatched: $("hide_unmatched").checked, lm_device_filter: $("lm_device_filter").value,
+    fetch_status: $("fetch_status").checked, fetch_alerts: $("fetch_alerts").checked,
+    refresh_minutes: Number($("refresh_minutes").value || 0),
+  };
+}
+async function post(url, body) {
+  const r = await fetch(url, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.detail || r.statusText);
+  return j;
+}
+async function save(e) {
+  e.preventDefault();
+  $("save-status").textContent = "Saving…";
+  try { await post("/api/settings", values()); $("save-status").textContent = "Saved. Refresh started."; setTimeout(() => location.href = "/", 1200); }
+  catch (err) { $("save-status").textContent = "Error: " + err.message; }
+}
+async function clearSecrets() {
+  if (!confirm("Remove the saved bearer token and access key?")) return;
+  await post("/api/settings", {clear_secrets: true});
+  location.reload();
+}
+async function testConn() {
+  $("test-status").textContent = "Testing…";
+  try {
+    const j = await post("/api/lm/test", values());
+    $("test-status").innerHTML = `<span class="up">OK</span>: ${j.groups} device groups visible`;
+  } catch (err) { $("test-status").innerHTML = `<span class="down">Failed</span>: ${esc(err.message)}`; }
+}
+async function findGroups() {
+  const out = $("groups-result");
+  out.textContent = "Searching…";
+  try {
+    const j = await post("/api/lm/groups", {...values(), q: $("group-q").value});
+    if (!j.groups.length) { out.textContent = "No groups found."; return; }
+    out.innerHTML = `<table><thead><tr><th></th><th>ID</th><th>Path</th><th class="num">Devices</th></tr></thead><tbody>` +
+      j.groups.map(g => `<tr><td><button type="button" onclick="addGroup(${Number(g.id)})">Add</button></td>` +
+        `<td>${Number(g.id)}</td><td>${esc(g.fullPath || g.name)}</td><td class="num">${esc(g.numOfHosts ?? "")}</td></tr>`).join("") +
+      `</tbody></table>`;
+  } catch (err) { out.textContent = "Error: " + err.message; }
+}
+function addGroup(id) {
+  const ids = $("lm_group_ids").value.split(/[,;\s]+/).filter(Boolean);
+  if (!ids.includes(String(id))) ids.push(String(id));
+  $("lm_group_ids").value = ids.join(", ");
+}
+</script>
+{% endblock %}

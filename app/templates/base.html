@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>{% block title %}Switchport Map{% endblock %}</title>
+<style>
+  :root { --bg:#f7f8fa; --fg:#1d2330; --muted:#667085; --card:#fff; --line:#e3e6eb;
+          --ok:#127a3e; --warn:#b54708; --bad:#b42318; --info:#3b5bdb; --accent:#1f6feb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#12151b; --fg:#e6e9ef; --muted:#98a2b3; --card:#1a1e26; --line:#2b313c;
+            --ok:#4ade80; --warn:#fbbf24; --bad:#f87171; --info:#93a8ff; --accent:#58a6ff; }
+  }
+  * { box-sizing:border-box }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; background:var(--bg); color:var(--fg) }
+  header { display:flex; align-items:center; gap:16px; padding:12px 24px; border-bottom:1px solid var(--line); background:var(--card) }
+  header h1 { font-size:16px; margin:0 } header a { color:inherit; text-decoration:none }
+  .nav { display:flex; gap:14px; margin-left:16px } .nav a { color:var(--muted) } .nav a:hover { color:var(--fg) }
+  select { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg) }
+  header .meta { color:var(--muted); font-size:12px; margin-left:auto }
+  main { padding:20px 24px; max-width:1600px }
+  button, .btn { font:inherit; padding:6px 12px; border:1px solid var(--line); border-radius:6px;
+           background:var(--card); color:var(--fg); cursor:pointer; text-decoration:none }
+  button:hover, .btn:hover { border-color:var(--accent) }
+  table { width:100%; border-collapse:collapse; background:var(--card); border:1px solid var(--line); border-radius:8px; overflow:hidden }
+  th, td { padding:6px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
+  th { font-size:12px; color:var(--muted); font-weight:600; position:sticky; top:0; background:var(--card) }
+  tr:last-child td { border-bottom:0 }
+  td.num { font-variant-numeric:tabular-nums; text-align:right }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:12px; border:1px solid currentColor }
+  .up { color:var(--ok) } .down { color:var(--bad) } .warn { color:var(--warn) } .info { color:var(--info) } .muted { color:var(--muted) }
+  .banner { padding:8px 12px; border-radius:6px; margin-bottom:12px; border:1px solid var(--line); background:var(--card) }
+  .banner.err { border-color:var(--bad) }
+  .toolbar { display:flex; gap:12px; align-items:center; margin:0 0 12px; flex-wrap:wrap }
+  input[type=search] { font:inherit; padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); min-width:260px }
+  ul.issues { margin:0; padding-left:16px }
+  code { font-size:12px }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="/">Switchport Map</a></h1>
+  {% block crumbs %}{% endblock %}
+  <nav class="nav"><a href="/">Devices</a><a href="/topology">Topology</a><a href="/settings">Settings</a></nav>
+  <span class="meta">
+    {% if refreshing %}Refreshing…{% else %}Updated {{ report.generated_at|ts }} ({{ report.duration_s }}s){% endif %}
+  </span>
+  <button onclick="doRefresh(this)" {% if refreshing %}disabled{% endif %}>Refresh</button>
+</header>
+<main>
+  {% if last_error %}<div class="banner err">Refresh failed: {{ last_error }}</div>{% endif %}
+  {% for e in report.lm_errors %}<div class="banner err">{{ e }}</div>{% endfor %}
+  {% block content %}{% endblock %}
+</main>
+<script>
+async function doRefresh(btn) {
+  btn.disabled = true; btn.textContent = "Refreshing…";
+  await fetch("/api/refresh", {method: "POST"});
+  const poll = async () => {
+    const s = await (await fetch("/healthz")).json();
+    if (s.refreshing) setTimeout(poll, 2000); else location.reload();
+  };
+  setTimeout(poll, 1500);
+}
+function filterRows(input, issuesOnly) {
+  const q = input.value.toLowerCase(), only = issuesOnly && issuesOnly.checked;
+  document.querySelectorAll("tbody tr").forEach(tr => {
+    const hit = tr.textContent.toLowerCase().includes(q) && (!only || tr.dataset.issues === "1");
+    tr.style.display = hit ? "" : "none";
+  });
+}
+{% if refreshing %}setTimeout(() => location.reload(), 3000);{% endif %}
+</script>
+</body>
+</html>

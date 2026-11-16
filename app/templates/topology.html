@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}Topology · {{ site }}{% endblock %}
+{% block crumbs %}<span class="muted">/ Topology</span>{% endblock %}
+{% block content %}
+<style>
+  .topo-wrap { position:relative; background:var(--card); border:1px solid var(--line); border-radius:8px; height:68vh; overflow:hidden }
+  #topo { width:100%; height:100%; cursor:grab; user-select:none }
+  #topo.dragging { cursor:grabbing }
+  .dev-box { fill:var(--card); stroke:var(--line); stroke-width:1.5 }
+  .dev-box.fw { stroke:var(--fg); stroke-width:2 }
+  .dev-box.ext { stroke-dasharray:4 3 }
+  .dev-title { font-size:13px; font-weight:600; fill:var(--fg); cursor:pointer }
+  .dev-sub { font-size:11px; fill:var(--muted) }
+  .port { stroke:var(--card); stroke-width:2; cursor:pointer }
+  .port.trunk { stroke:var(--fg); stroke-width:2 }
+  .port.routed { fill:var(--card); stroke:var(--muted); stroke-width:1.5 }
+  .port.none { fill:var(--line); stroke:var(--card) }
+  .port.issue { stroke:#fab219; stroke-width:2.5 }
+  .lnk path { fill:none; stroke-linecap:round }
+  .lnk .hit { stroke:transparent; stroke-width:14; cursor:pointer }
+  .dim { opacity:.12 }
+  .legend { display:flex; flex-wrap:wrap; gap:6px; margin:10px 0 }
+  .chip { display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border:1px solid var(--line); border-radius:14px; background:var(--card); cursor:pointer; font-size:12px; color:var(--fg) }
+  .chip.on { border-color:var(--fg); box-shadow:0 0 0 1px var(--fg) inset }
+  .sw { width:12px; height:12px; border-radius:3px; display:inline-block }
+  #tip { position:absolute; pointer-events:none; background:var(--card); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font-size:12px; box-shadow:0 4px 16px rgba(0,0,0,.18); display:none; max-width:360px; z-index:5 }
+  #tip b { display:block; margin-bottom:2px }
+  .keyrow { display:flex; gap:16px; flex-wrap:wrap; font-size:12px; color:var(--muted); align-items:center }
+  .keyrow svg { vertical-align:middle }
+</style>
+
+<div class="toolbar">
+  <label>Site
+    <select onchange="location.href='/topology?site='+encodeURIComponent(this.value)">
+      {% for s in sites %}<option value="{{ s }}" {% if s == site %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+  </label>
+  <button onclick="fit()">Fit</button>
+  <span class="muted">Scroll to zoom, drag to pan. Click a VLAN to isolate it. Click a device name to open its ports.</span>
+</div>
+
+{% if not data %}
+  <div class="banner">No devices for this site yet.</div>
+{% else %}
+<div class="legend" id="legend"></div>
+<div class="keyrow" style="margin-bottom:8px">
+  <span><svg width="14" height="14"><rect x="1" y="1" width="12" height="12" rx="3" fill="#2a78d6"/></svg> access (VLAN colour)</span>
+  <span><svg width="14" height="14"><rect x="1" y="1" width="12" height="12" rx="3" fill="#2a78d6" stroke="currentColor" stroke-width="2"/></svg> trunk (native colour, ringed)</span>
+  <span><svg width="14" height="14"><rect x="1" y="1" width="12" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg> routed / L3</span>
+  <span><svg width="14" height="14"><rect x="1" y="1" width="12" height="12" rx="3" fill="url(#hatch-key)" stroke="currentColor" stroke-width=".5"/><defs><pattern id="hatch-key" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="2" height="4" fill="currentColor"/></pattern></defs></svg> down / disabled</span>
+  <span><svg width="14" height="14"><rect x="1" y="1" width="12" height="12" rx="3" fill="none" stroke="#fab219" stroke-width="2.5"/></svg> port has warnings</span>
+  <span><svg width="30" height="10"><path d="M2 5H28" stroke="#d03b3b" stroke-width="2" stroke-dasharray="4 3"/></svg> link down</span>
+  <span>⚠ link warning (e.g. VLAN mismatch)</span>
+</div>
+<div class="topo-wrap">
+  <svg id="topo" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <pattern id="hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <rect width="2" height="4" fill="var(--muted)"/>
+      </pattern>
+    </defs>
+    <g id="viewport"><g id="links"></g><g id="devices"></g></g>
+  </svg>
+  <div id="tip"></div>
+</div>
+
+<h3 style="margin-top:20px">Links</h3>
+<table>
+  <thead><tr><th>Device A</th><th>Port</th><th>Device B</th><th>Port</th><th>VLANs</th><th>Found by</th><th>Status</th><th>Warnings</th></tr></thead>
+  <tbody id="linktable"></tbody>
+</table>
+{% endif %}
+
+<script>
+const DATA = {{ data | tojson }};
+</script>
+<script>
+(() => {
+  if (!DATA) return;
+  const NS = "http://www.w3.org/2000/svg";
+  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+  const mode = dark ? "dark" : "light";
+  const OTHER = DATA.other_color[mode];
+  const vlanMeta = Object.fromEntries(DATA.vlans.map(v => [v.id, v]));
+  const colour = v => (vlanMeta[v] && vlanMeta[v].color) ? vlanMeta[v].color[mode] : OTHER;
+  const devById = Object.fromEntries(DATA.devices.map(d => [d.id, d]));
+  const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+  const el = (tag, attrs = {}, parent) => {
+    const e = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (parent) parent.appendChild(e);
+    return e;
+  };
+  const natural = (a, b) => a.localeCompare(b, undefined, {numeric: true, sensitivity: "base"});
+
+  // ---------- layout ----------
+  const P = 14, G = 4, PAD = 12, HEAD = 40;
+  const ROW_GAP = 150, COL_GAP = 50;
+  for (const d of DATA.devices) {
+    d.phys = d.ports.filter(p => p.kind === "physical").sort((a, b) => natural(a.name, b.name));
+    const n = Math.max(d.phys.length, 1);
+    d.rows = n > 12 ? 2 : 1;
+    d.cols = Math.ceil(n / d.rows);
+    d.w = Math.max(240, d.cols * (P + G) - G + PAD * 2);
+    d.h = HEAD + d.rows * (P + G) - G + PAD;
+  }
+  const adj = {};
+  for (const l of DATA.links) {
+    (adj[l.a] ||= []).push(l.b);
+    (adj[l.b] ||= []).push(l.a);
+  }
+  const tiers = {};
+  for (const d of DATA.devices) (tiers[d.tier] ||= []).push(d);
+  const tierKeys = Object.keys(tiers).map(Number).sort((a, b) => a - b);
+  let y = 20;
+  for (const t of tierKeys) {
+    const row = tiers[t];
+    row.forEach(d => {
+      const parents = (adj[d.id] || []).map(i => devById[i]).filter(p => p && p.x !== undefined);
+      d.bary = parents.length ? parents.reduce((s, p) => s + p.x + p.w / 2, 0) / parents.length : Infinity;
+    });
+    row.sort((a, b) => (a.bary - b.bary) || natural(a.hostname, b.hostname));
+    let x = 0;
+    for (const d of row) { d.x = x; d.y = y; x += d.w + COL_GAP; }
+    row.width = x - COL_GAP;
+    y += Math.max(...row.map(d => d.h)) + ROW_GAP;
+  }
+  const maxW = Math.max(...tierKeys.map(t => tiers[t].width));
+  for (const t of tierKeys) {
+    const shift = (maxW - tiers[t].width) / 2;
+    tiers[t].forEach(d => d.x += shift);
+  }
+
+  // ---------- devices ----------
+  const gDev = document.getElementById("devices"), gLnk = document.getElementById("links");
+  const tip = document.getElementById("tip"), wrap = document.querySelector(".topo-wrap");
+  const showTip = (evt, html) => {
+    tip.innerHTML = html; tip.style.display = "block";
+    const r = wrap.getBoundingClientRect();
+    let left = evt.clientX - r.left + 14, top = evt.clientY - r.top + 14;
+    if (left + 360 > r.width) left = evt.clientX - r.left - 370;
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+  };
+  const hideTip = () => tip.style.display = "none";
+  const portPos = {};
+
+  for (const d of DATA.devices) {
+    const g = el("g", {transform: `translate(${d.x},${d.y})`, "data-dev": d.id}, gDev);
+    el("rect", {class: "dev-box" + (d.role === "firewall" ? " fw" : "") + (d.external ? " ext" : ""),
+                width: d.w, height: d.h, rx: 8}, g);
+    const title = el("text", {class: "dev-title", x: PAD, y: 18}, g);
+    title.textContent = (d.role === "firewall" ? "🛡 " : "") + d.hostname;
+    title.addEventListener("click", () => location.href = "/switch/" + encodeURIComponent(d.id));
+    const sub = el("text", {class: "dev-sub", x: PAD, y: 32}, g);
+    sub.textContent = [d.role === "firewall" ? "Firewall" : "Switch", d.vendor, d.lm_device ? "LM ✓" : "not in LM",
+                       d.external ? "other site" : ""].filter(Boolean).join(" · ");
+    d.phys.forEach((p, i) => {
+      const col = i % d.cols, row = Math.floor(i / d.cols);
+      const px = PAD + col * (P + G), py = HEAD + row * (P + G);
+      portPos[d.id + "|" + p.name.toLowerCase()] = {x: d.x + px + P / 2, top: d.y, bottom: d.y + d.h, dev: d};
+      const down = p.admin_down || p.lm_oper === "down" || p.lm_oper === "lowerLayerDown";
+      let cls = "port", fill;
+      if (p.mode === "access" && p.access_vlan) fill = colour(p.access_vlan);
+      else if (p.mode === "trunk") { cls += " trunk"; fill = p.native_vlan ? colour(p.native_vlan) : "var(--card)"; }
+      else if (p.mode === "routed" || p.ip) { cls += " routed"; }
+      else cls += " none";
+      if (p.issues.length) cls += " issue";
+      const r = el("rect", {class: cls, x: px, y: py, width: P, height: P, rx: 3}, g);
+      if (fill) r.setAttribute("fill", fill);
+      if (down) el("rect", {x: px, y: py, width: P, height: P, rx: 3, fill: "url(#hatch)", "pointer-events": "none", opacity: .8}, g);
+      r.dataset.vlans = JSON.stringify(p.vlans); r.dataset.all = p.all_vlans ? "1" : "";
+      r.classList.add("vl-target");
+      r.addEventListener("mousemove", e => showTip(e, `<b>${esc(d.hostname)} ${esc(p.name)}</b>` +
+        (p.description ? `${esc(p.description)}<br>` : "") +
+        (p.lm_alias && p.lm_alias !== p.description ? `LM alias: ${esc(p.lm_alias)}<br>` : "") +
+        `Mode: ${esc(p.mode)}` +
+        (p.access_vlan ? ` · VLAN ${esc(p.access_vlan)}` : "") +
+        (p.native_vlan ? ` · native ${esc(p.native_vlan)}` : "") +
+        (p.allowed_vlans ? ` · allowed ${esc(p.allowed_vlans)}` : "") +
+        (p.voice_vlan ? ` · voice ${esc(p.voice_vlan)}` : "") +
+        (p.ip ? `<br>IP ${esc(p.ip)}` : "") + (p.lag ? `<br>Group: ${esc(p.lag)}` : "") +
+        `<br>Config: ${p.admin_down ? "shutdown" : "enabled"} · LM: ${esc(p.lm_oper || "n/a")}` +
+        (p.issues.length ? `<br>⚠ ${p.issues.map(esc).join("<br>⚠ ")}` : "")));
+      r.addEventListener("mouseleave", hideTip);
+    });
+  }
+
+  // ---------- links ----------
+  const anchor = (devId, port, other) => {
+    const d = devById[devId], o = devById[other];
+    const below = o.y > d.y, same = o.y === d.y;
+    const pp = port && portPos[devId + "|" + port.toLowerCase()];
+    const x = pp ? pp.x : d.x + d.w / 2;
+    return {x, y: (below || same) ? d.y + d.h : d.y, dir: (below || same) ? 1 : -1};
+  };
+  for (const l of DATA.links) {
+    if (!devById[l.a] || !devById[l.b]) continue;
+    const A = anchor(l.a, l.a_port, l.b), B = anchor(l.b, l.b_port, l.a);
+    const g = el("g", {class: "lnk"}, gLnk);
+    g.dataset.vlans = JSON.stringify(l.vlans); g.dataset.all = l.all_vlans ? "1" : "";
+    const coloured = l.vlans.filter(v => vlanMeta[v] && vlanMeta[v].color);
+    const strokes = coloured.map(v => ({v, c: colour(v)}));
+    if (l.all_vlans || l.vlans.length > coloured.length || !l.vlans.length) strokes.push({v: "*", c: OTHER});
+    const bend = Math.max(40, Math.abs(B.y - A.y) / 2);
+    strokes.forEach((s, i) => {
+      const off = (i - (strokes.length - 1) / 2) * 3.2;
+      const d = `M${A.x + off},${A.y} C${A.x + off},${A.y + A.dir * bend} ${B.x + off},${B.y + B.dir * bend} ${B.x + off},${B.y}`;
+      const path = el("path", {d, stroke: s.c, "stroke-width": 2, "data-v": s.v}, g);
+      if (l.status === "down") { path.setAttribute("stroke", "#d03b3b"); path.setAttribute("stroke-dasharray", "5 4"); }
+      if (l.status === "disabled") path.setAttribute("opacity", .35);
+      if (s.v === "*" && l.all_vlans) path.setAttribute("stroke-dasharray", "1 4");
+    });
+    const mid = `M${A.x},${A.y} C${A.x},${A.y + A.dir * bend} ${B.x},${B.y + B.dir * bend} ${B.x},${B.y}`;
+    const hit = el("path", {d: mid, class: "hit"}, g);
+    if (l.issues.length) {
+      const t = el("text", {x: (A.x + B.x) / 2 - 6, y: (A.y + B.y) / 2 + 5, "font-size": 16, fill: "#fab219"}, g);
+      t.textContent = "⚠";
+    }
+    const da = devById[l.a], db = devById[l.b];
+    hit.addEventListener("mousemove", e => showTip(e,
+      `<b>${esc(da.hostname)} ${esc(l.a_port || "?")} ↔ ${esc(db.hostname)} ${esc(l.b_port || "?")}</b>` +
+      `VLANs: ${l.all_vlans ? "all" : esc(l.vlans.join(", ") || "none known")}<br>` +
+      `Found by: ${esc(l.sources.join(", "))} · Status: ${esc(l.status)}` +
+      (l.issues.length ? `<br>⚠ ${l.issues.map(esc).join("<br>⚠ ")}` : "")));
+    hit.addEventListener("mouseleave", hideTip);
+  }
+
+  // ---------- legend / VLAN isolate ----------
+  const legend = document.getElementById("legend");
+  let active = null;
+  const apply = () => {
+    document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.v === active));
+    document.querySelectorAll(".vl-target").forEach(r => {
+      const has = !active || r.dataset.all || JSON.parse(r.dataset.vlans).includes(active);
+      r.classList.toggle("dim", !has);
+    });
+    document.querySelectorAll(".lnk").forEach(g => {
+      const has = !active || g.dataset.all || JSON.parse(g.dataset.vlans).includes(active);
+      g.classList.toggle("dim", !has);
+      g.querySelectorAll("path[data-v]").forEach(p => {
+        const keep = !active || p.dataset.v === active || (p.dataset.v === "*" && !(vlanMeta[active] || {}).color);
+        p.setAttribute("stroke-width", active && keep && has ? 3.5 : 2);
+        p.style.opacity = keep ? "" : .15;
+      });
+    });
+  };
+  for (const v of DATA.vlans) {
+    const c = document.createElement("span");
+    c.className = "chip"; c.dataset.v = v.id;
+    c.innerHTML = `<span class="sw" style="background:${v.color ? v.color[mode] : OTHER}"></span>` +
+                  `VLAN ${esc(v.id)}${v.name ? " " + esc(v.name) : ""} <span class="muted">${v.ports}</span>`;
+    c.title = v.color ? "" : "More than 8 VLANs at this site: shown in grey. Click to isolate.";
+    c.onclick = () => { active = active === v.id ? null : v.id; apply(); };
+    legend.appendChild(c);
+  }
+
+  // ---------- links table (accessible view) ----------
+  const tb = document.getElementById("linktable");
+  for (const l of DATA.links) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${esc(devById[l.a].hostname)}</td><td>${esc(l.a_port || "?")}</td>` +
+      `<td>${esc(devById[l.b].hostname)}</td><td>${esc(l.b_port || "?")}</td>` +
+      `<td>${l.all_vlans ? "all" : esc(l.vlans.join(", "))}</td><td>${esc(l.sources.join(", "))}</td>` +
+      `<td>${esc(l.status)}</td><td class="warn">${l.issues.map(esc).join("<br>")}</td>`;
+    tb.appendChild(tr);
+  }
+
+  // ---------- pan / zoom ----------
+  const svg = document.getElementById("topo"), vp = document.getElementById("viewport");
+  let s = 1, tx = 0, ty = 0;
+  const setT = () => vp.setAttribute("transform", `translate(${tx},${ty}) scale(${s})`);
+  window.fit = () => {
+    const bb = vp.getBBox(), W = svg.clientWidth, H = svg.clientHeight;
+    s = Math.min(W / (bb.width + 60), H / (bb.height + 60), 1.6);
+    tx = (W - bb.width * s) / 2 - bb.x * s; ty = (H - bb.height * s) / 2 - bb.y * s; setT();
+  };
+  svg.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = svg.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    const k = Math.exp(-e.deltaY * 0.0015), ns = Math.min(4, Math.max(0.15, s * k));
+    tx = mx - (mx - tx) * ns / s; ty = my - (my - ty) * ns / s; s = ns; setT();
+  }, {passive: false});
+  let drag = null;
+  svg.addEventListener("mousedown", e => { drag = {x: e.clientX - tx, y: e.clientY - ty}; svg.classList.add("dragging"); });
+  addEventListener("mousemove", e => { if (drag) { tx = e.clientX - drag.x; ty = e.clientY - drag.y; setT(); } });
+  addEventListener("mouseup", () => { drag = null; svg.classList.remove("dragging"); });
+  fit();
+})();
+</script>
+{% endblock %}
