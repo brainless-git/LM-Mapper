@@ -80,7 +80,8 @@ Docker tab, **Add Container**:
 | Path `/data` | `/mnt/user/appdata/lm-mapper/data` |
 | WebUI | `http://[IP]:[PORT:8080]/` |
 
-The image runs as uid 99 / gid 100 (Unraid `nobody:users`), so appdata is writable without changes.
+The app runs as uid 99 / gid 100 (Unraid `nobody:users`). The entrypoint starts as root only to
+fix ownership of `/data`, then drops to that user. Set `PUID` / `PGID` to change it.
 If the GHCR package is private, either make it public in the package settings on GitHub or
 log Unraid in to GHCR with a token that has `read:packages`.
 

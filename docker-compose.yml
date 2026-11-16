@@ -11,6 +11,5 @@ services:
       - ./configs:/configs:ro
       - ./mapping:/mapping:ro
       - ./data:/data
-    read_only: true
     tmpfs:
       - /tmp
