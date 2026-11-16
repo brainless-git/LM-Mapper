@@ -62,6 +62,37 @@ class LMClient:
             return r.json()
         raise LMError(f"GET {resource_path} failed after retries")
 
+    def post(self, resource_path: str, body: dict, params: dict | None = None) -> Any:
+        import json as _json
+        data = _json.dumps(body)
+        for attempt in range(6):
+            headers = {"Authorization": self._auth_header("POST", resource_path, data),
+                       "X-Version": "3", "Accept": "application/json", "Content-Type": "application/json"}
+            r = self.session.post(self.base + resource_path, params=params, data=data,
+                                  headers=headers, timeout=self.timeout)
+            if r.status_code == 429 or r.status_code >= 500:
+                time.sleep(min(float(r.headers.get("X-Rate-Limit-Window", 0) or 0) or 2 ** attempt, 60))
+                continue
+            if r.status_code not in (200, 201, 202):
+                raise LMError(f"POST {resource_path} -> HTTP {r.status_code}: {r.text[:300]}")
+            return r.json()
+        raise LMError(f"POST {resource_path} failed after retries")
+
+    def collector_debug(self, collector_id: int, cmdline: str, timeout_s: int = 60) -> str:
+        """Run a collector debug command (e.g. '!snmpwalk host oid') and return its output."""
+        start = self.post("/debug", {"cmdline": cmdline}, {"collectorId": int(collector_id)})
+        sid = start.get("sessionId") or start.get("id")
+        if not sid:
+            raise LMError(f"Debug command not accepted: {str(start)[:200]}")
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            time.sleep(2)
+            res = self.get(f"/debug/{sid}", {"collectorId": int(collector_id)})
+            out = res.get("output")
+            if out:
+                return out
+        raise LMError(f"Debug command timed out: {cmdline}")
+
     def paged(self, resource_path: str, params: dict | None = None) -> Iterator[dict]:
         params = dict(params or {})
         offset = 0

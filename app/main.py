@@ -216,7 +216,7 @@ def api_refresh():
 def api_switches():
     r = state.report
     return {"generated_at": r.generated_at, "duration_s": r.duration_s, "switches": r.switches,
-            "lm_config_stats": r.lm_config_stats,
+            "lm_config_stats": r.lm_config_stats, "snmp_stats": r.snmp_stats,
             "parse_errors": r.parse_errors, "lm_errors": r.lm_errors}
 
 
@@ -232,7 +232,7 @@ def api_ports(switch: str | None = None, issues_only: bool = False):
 
 CSV_FIELDS = ["switch", "lm_device", "port", "kind", "ip", "description", "lm_alias", "mode", "access_vlan",
               "native_vlan", "allowed_vlans", "voice_vlan", "lag", "cfg_admin", "lm_oper",
-              "lm_instance", "lm_instance_id", "in_config", "alerts", "issues"]
+              "lm_instance", "lm_instance_id", "mac_count", "macs", "in_config", "alerts", "issues"]
 
 
 @app.get("/export.csv")
@@ -242,7 +242,7 @@ def export_csv(switch: str | None = None):
     w = csv.DictWriter(buf, fieldnames=CSV_FIELDS, extrasaction="ignore")
     w.writeheader()
     for r in rows:
-        w.writerow({**r, "alerts": len(r["alerts"]),
+        w.writerow({**r, "alerts": len(r["alerts"]), "macs": " ".join(r.get("macs", [])),
                     "issues": "; ".join(i["text"] for i in r["issues"])})
     name = f"portmap-{switch or 'all'}-{time.strftime('%Y%m%d-%H%M')}.csv"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",

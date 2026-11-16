@@ -57,9 +57,30 @@ and the table shows which sources found each one.
 3. **FortiLink:** each managed FortiSwitch's FortiLink trunk goes to the FortiGate's FortiLink
    ports. If another switch has an auto-ISL trunk named after this switch's serial, the
    uplink goes to that switch instead (tiered FortiLink).
-4. **Descriptions:** a port description (config, or LM ifAlias) containing another device's
+4. **MAC address tables** (optional, collector SNMP, see below). A switch port that learns another
+   device's own MAC faces that device; it is a direct link if no third switch sits in between.
+5. **Descriptions:** a port description (config, or LM ifAlias) containing another device's
    hostname, serial or alias. A port name after the hostname is used as the far-end port,
-   e.g. `Uplink EDGE-SW02 port 25`.
+   e.g. `Uplink EDGE-SW02 port 25`. Short names work within a site: `TRUNK SW02/P47` and
+   `TRUNK SW8/P23` match `SVG-TUR-SW02` and `SVG-TUR-SW08`, and words like `FortiGate`, `FW` or `UTM`
+   match the site's firewall when it has exactly one.
+
+### LLDP and MAC tables through LogicMonitor collectors
+
+Turn on **Walk LLDP and MAC tables via LM collectors** on the Settings page (or `LM_COLLECTOR_SNMP=true`).
+For each config device matched to LogicMonitor, the app runs collector debug commands
+(`POST /debug` with `!snmpwalk <host> <oid>`) on the device's collector, using the SNMP credentials LM
+already holds. It walks ifName, ifPhysAddress, the bridge MAC, the Q-BRIDGE/BRIDGE FDB and the LLDP
+local/remote tables. That gives:
+
+- links from LLDP neighbours (source `lldp`)
+- links inferred from MAC tables (source `mac`)
+- the MACs learned on every port: in the port table, the port tooltip, the CSV, and a MAC search on
+  the topology page that names the most likely access port
+
+The API user needs permission to run collector debug commands, which is more than read-only. About
+10 commands run per device per walk; LogicMonitor records them in its audit log. Results are cached in
+`/data/snmp-cache` for `SNMP_CACHE_MINUTES` (default 60).
 
 ## Sites
 
@@ -127,6 +148,8 @@ Settings saved on the Settings page override these.
 | `LM_CONFIGSOURCE_REGEX` | `.*` | Only use ConfigSources whose name matches |
 | `LM_CONFIG_INSTANCE_PREFER` | `running\|full\|show.?run\|backup\|config` | Preferred ConfigSource instance names |
 | `LM_CONFIG_INSTANCE_EXCLUDE` | `startup\|version\|inventory\|licen[cs]e\|hardware\|log\|diff` | Instance names never used |
+| `LM_COLLECTOR_SNMP` | `false` | Walk LLDP and MAC tables through LM collectors |
+| `SNMP_CACHE_MINUTES` | `60` | How long collector SNMP results are reused |
 | `LM_CONFIG_MAX_DEVICES` | `500` | Safety cap on devices checked for configs per refresh |
 | `LM_INTERFACE_DATASOURCES` | `^SNMP_Network_Interfaces$,^snmp64_If-?$,Interfaces,FortiSwitch.*Port` | Ordered regexes for the interface DataSource |
 | `LM_NAME_PROPERTIES` | `auto.interface.name,auto.interface.description,auto.interface.ifname` | Instance properties holding ifName / ifDescr |

@@ -36,6 +36,8 @@
     </select>
   </label>
   <button onclick="fit()">Fit</button>
+  <input type="search" id="macq" placeholder="Find MAC (e.g. 9c:dc:71 or 9cdc.7125)" style="min-width:240px">
+  <span id="macres" class="muted"></span>
   <span class="muted">Scroll to zoom, drag to pan. Click a VLAN to isolate it. Click a device name to open its ports.</span>
 </div>
 
@@ -169,6 +171,7 @@ const DATA = {{ data | tojson }};
       if (fill) r.setAttribute("fill", fill);
       if (down) el("rect", {x: px, y: py, width: P, height: P, rx: 3, fill: "url(#hatch)", "pointer-events": "none", opacity: .8}, g);
       r.dataset.vlans = JSON.stringify(p.vlans); r.dataset.all = p.all_vlans ? "1" : "";
+      r.dataset.macs = p.macs.join(" "); r.dataset.label = d.hostname + " " + p.name;
       r.classList.add("vl-target");
       r.addEventListener("mousemove", e => showTip(e, `<b>${esc(d.hostname)} ${esc(p.name)}</b>` +
         (p.description ? `${esc(p.description)}<br>` : "") +
@@ -180,6 +183,7 @@ const DATA = {{ data | tojson }};
         (p.voice_vlan ? ` · voice ${esc(p.voice_vlan)}` : "") +
         (p.ip ? `<br>IP ${esc(p.ip)}` : "") + (p.lag ? `<br>Group: ${esc(p.lag)}` : "") +
         `<br>Config: ${p.admin_down ? "shutdown" : "enabled"} · LM: ${esc(p.lm_oper || "n/a")}` +
+        (p.macs.length ? `<br>MACs learned: ${p.macs.length}${p.macs.length >= 200 ? "+" : ""}: ${p.macs.slice(0, 6).map(esc).join(", ")}${p.macs.length > 6 ? " …" : ""}` : "") +
         (p.issues.length ? `<br>⚠ ${p.issues.map(esc).join("<br>⚠ ")}` : "")));
       r.addEventListener("mouseleave", hideTip);
     });
@@ -253,6 +257,25 @@ const DATA = {{ data | tojson }};
     c.onclick = () => { active = active === v.id ? null : v.id; apply(); };
     legend.appendChild(c);
   }
+
+  // ---------- MAC search ----------
+  const macq = document.getElementById("macq"), macres = document.getElementById("macres");
+  const hexOnly = v => v.toLowerCase().replace(/[^0-9a-f]/g, "");
+  macq.addEventListener("input", () => {
+    const q = hexOnly(macq.value);
+    const hits = [];
+    document.querySelectorAll(".vl-target").forEach(r => {
+      const hit = q.length >= 4 && r.dataset.macs.split(" ").some(m => hexOnly(m).includes(q));
+      r.classList.toggle("dim", q.length >= 4 && !hit);
+      if (hit) hits.push([r.dataset.label, r.dataset.macs.split(" ").length]);
+    });
+    document.querySelectorAll(".lnk").forEach(g => g.classList.toggle("dim", q.length >= 4));
+    hits.sort((a, b) => a[1] - b[1]);
+    macres.textContent = q.length < 4 ? "" : !hits.length ? "Not found" :
+      `Most likely on ${hits[0][0]} (${hits[0][1]} MAC${hits[0][1] > 1 ? "s" : ""} on that port)` +
+      (hits.length > 1 ? `. Also seen via uplinks: ${hits.slice(1, 6).map(h => h[0]).join(", ")}${hits.length > 6 ? " …" : ""}` : "");
+    if (q.length < 4) apply();
+  });
 
   // ---------- links table (accessible view) ----------
   const tb = document.getElementById("linktable");

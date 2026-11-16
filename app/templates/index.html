@@ -7,6 +7,10 @@
 <p class="muted">LogicMonitor configs: {{ report.lm_config_stats.devices }} devices parsed
   ({{ report.lm_config_stats.downloaded }} downloaded, {{ report.lm_config_stats.cached }} unchanged since last refresh).</p>
 {% endif %}
+{% if report.snmp_stats %}
+<p class="muted">Collector SNMP: {{ report.snmp_stats.devices }} devices walked, {{ report.snmp_stats.lldp_neighbours }} LLDP neighbours,
+  {{ report.snmp_stats.macs }} MAC entries, {{ report.snmp_stats.mac_links }} links inferred from MAC tables{% if report.snmp_stats.errors %}, {{ report.snmp_stats.errors }} devices failed{% endif %}.</p>
+{% endif %}
 {% if report.parse_errors %}
 <div class="banner err"><strong>Configs that could not be read:</strong>
   <ul>{% for e in report.parse_errors %}<li><code>{{ e.file }}</code>: {{ e.error }}</li>{% endfor %}</ul>

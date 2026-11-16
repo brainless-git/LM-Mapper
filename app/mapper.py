@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from .lm_client import LMClient
 from .lm_configs import fetch_lm_configs
+from . import lm_snmp
 from .models import SwitchConfig, natural_key, normalise_ifname
 from .parsers import Inventory, load_inventory
 from .topology import build_topology, discover_links
@@ -29,6 +30,7 @@ class Report:
     parse_errors: list[dict] = field(default_factory=list)
     topology: dict = field(default_factory=dict)
     lm_config_stats: dict = field(default_factory=dict)
+    snmp_stats: dict = field(default_factory=dict)
     neighbour_count: int = 0
     lm_errors: list[str] = field(default_factory=list)
 
@@ -238,11 +240,36 @@ def build_report(settings: Settings, client: LMClient | None) -> Report:
         rep.switches.append(summary)
         rep.rows.extend(rows)
 
+    # LLDP + MAC tables through the LM collectors
+    mac_links, port_macs = [], {}
+    if client is not None and settings.collector_snmp:
+        targets = [(sm["switch_id"], by_id[sm["lm_device_id"]]) for sm in rep.switches
+                   if sm["lm_device_id"] in by_id]
+        try:
+            l2, errs = lm_snmp.collect(client, targets, settings.data_dir, settings.snmp_cache_minutes)
+            rep.lm_errors.extend(f"SNMP: {e}" for e in errs[:10])
+            host_of = {c.switch_id: c.hostname for c in keep}
+            inv.neighbours.extend(lm_snmp.lldp_neighbours(l2, host_of))
+            mac_links = lm_snmp.mac_links(l2)
+            for sid, d in l2.items():
+                for port, macs in d.fdb.items():
+                    port_macs[(sid, normalise_ifname(port))] = macs
+            for r in rep.rows:
+                macs = port_macs.get((r["switch_id"], normalise_ifname(r["port"])), set())
+                r["mac_count"] = len(macs)
+                r["macs"] = sorted(macs)[:20]
+            rep.snmp_stats = {"devices": len(l2), "lldp_neighbours": sum(len(d.lldp) for d in l2.values()),
+                              "macs": sum(len(m) for d in l2.values() for m in d.fdb.values()),
+                              "mac_links": len(mac_links), "errors": len(errs)}
+        except Exception as exc:
+            log.exception("Collector SNMP failed")
+            rep.lm_errors.append(f"SNMP: {exc}")
+
     try:
         lm_alias = {(r["switch_id"], normalise_ifname(r["port"])): r["lm_alias"]
                     for r in rep.rows if r["in_config"] and r["lm_alias"]}
-        links = discover_links(keep, inv.neighbours, settings.mapping, lm_alias)
-        rep.topology = build_topology(keep, links, rep.rows, rep.switches)
+        links = discover_links(keep, inv.neighbours, settings.mapping, lm_alias, mac_links)
+        rep.topology = build_topology(keep, links, rep.rows, rep.switches, port_macs)
     except Exception as exc:
         log.exception("Topology build failed")
         rep.lm_errors.append(f"Topology: {exc}")
@@ -291,7 +318,7 @@ def _row(sw, summary, port: dict | None, inst: dict | None, settings, alerts) ->
         "lm_instance": inst.get("displayName") if inst else "",
         "lm_alias": alias,
         "lm_monitored": (not inst.get("stopMonitoring", False)) if inst else None,
-        "lm_oper": None,
+        "lm_oper": None, "mac_count": 0, "macs": [],
         "alerts": [{"severity": a.get("severity"), "datapoint": a.get("dataPointName"),
                     "value": a.get("alertValue")} for a in inst_alerts],
     }

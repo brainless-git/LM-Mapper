@@ -18,7 +18,7 @@
 <table>
   <thead><tr>
     <th>Port</th><th>Config description</th><th>LM alias</th><th>Mode</th><th>VLAN</th><th>IP</th><th>LAG / group</th>
-    <th>Config admin</th><th>LM status</th><th>LM instance</th><th>Issues</th>
+    <th>Config admin</th><th>LM status</th><th class="num">MACs</th><th>LM instance</th><th>Issues</th>
   </tr></thead>
   <tbody>
   {% for r in rows %}
@@ -32,6 +32,7 @@
       <td>{{ r.lag or "" }}</td>
       <td>{% if r.cfg_admin %}<span class="{{ r.cfg_admin }}">{{ r.cfg_admin }}</span>{% endif %}</td>
       <td>{% if r.lm_oper %}<span class="{{ 'up' if r.lm_oper == 'up' else 'down' }}">{{ r.lm_oper }}</span>{% elif r.lm_instance_id %}<span class="muted">n/a</span>{% endif %}</td>
+      <td class="num" title="{{ r.macs | join(', ') }}">{{ r.mac_count or "" }}</td>
       <td>{% if r.lm_instance_id %}{{ r.lm_instance }} <span class="muted">#{{ r.lm_instance_id }}</span>{% endif %}</td>
       <td>{% if r.issues %}<ul class="issues">{% for i in r.issues %}<li class="{{ i.level }}">{{ i.text }}</li>{% endfor %}</ul>{% endif %}</td>
     </tr>

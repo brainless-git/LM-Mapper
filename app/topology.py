@@ -15,7 +15,7 @@ from collections import Counter, defaultdict, deque
 from .models import SwitchConfig, normalise_ifname
 from .parsers.neighbours import Neighbour
 
-SOURCE_PRIORITY = ["explicit", "cdp", "lldp", "fortilink", "isl", "description"]
+SOURCE_PRIORITY = ["explicit", "cdp", "lldp", "fortilink", "isl", "mac", "description"]
 
 # Categorical palette (validated 8-slot order). Slots go to the most widespread VLANs per site;
 # the rest fold to "other". Status colours are kept separate.
@@ -151,8 +151,18 @@ class LinkSet:
                            "sources": [source], "details": [detail] if detail else []})
 
 
+def _expand_lag(dev: SwitchConfig, port: str | None) -> list[str | None]:
+    """A LAG name ('Trk1', 'Po1', 'lag1') -> its physical member ports; anything else unchanged."""
+    if not port:
+        return [port]
+    k = normalise_ifname(port)
+    members = [p.name for p in dev.ports if p.lag and normalise_ifname(p.lag) == k and p.kind == "physical"]
+    return members or [port]
+
+
 def discover_links(devices: list[SwitchConfig], neighbours: list[Neighbour], mapping: dict,
-                   lm_alias: dict[tuple[str, str], str]) -> list[dict]:
+                   lm_alias: dict[tuple[str, str], str],
+                   mac_links: list[tuple[str, str, str, str | None]] | None = None) -> list[dict]:
     aliases = {str(k).lower(): [str(x) for x in (v or {}).get("aliases", [])]
                for k, v in (mapping.get("switches") or {}).items()}
     idx = DeviceIndex(devices, aliases)
@@ -168,8 +178,10 @@ def discover_links(devices: list[SwitchConfig], neighbours: list[Neighbour], map
     for n in neighbours:
         a, b = idx.resolve(n.local), idx.resolve(n.remote)
         if a and b:
-            ls.add(a, _canon_port(idx.by_id[a], n.local_port), b,
-                   _canon_port(idx.by_id[b], n.remote_port), n.protocol, n.source_file)
+            a_ports = _expand_lag(idx.by_id[a], _canon_port(idx.by_id[a], n.local_port))
+            b_port = _canon_port(idx.by_id[b], n.remote_port) if n.remote_port else None
+            for ap in a_ports:
+                ls.add(a, ap, b, b_port if len(a_ports) == 1 else None, n.protocol, n.source_file)
 
     # 3. FortiLink and ISL
     managed = [d for d in devices if d.meta.get("fortigate")]
@@ -189,6 +201,15 @@ def discover_links(devices: list[SwitchConfig], neighbours: list[Neighbour], map
             fw = idx.by_id[d.meta["fortigate"]]
             fw_members = [m for ms in (fw.meta.get("fortilink") or {}).values() for m in ms]
             _pair(ls, d.switch_id, up, fw.switch_id, fw_members, "fortilink")
+
+    # 3b. MAC address tables (collector SNMP)
+    for a, ap, b, bp in mac_links or []:
+        if a in idx.by_id and b in idx.by_id:
+            aps = _expand_lag(idx.by_id[a], _canon_port(idx.by_id[a], ap))
+            bps = _expand_lag(idx.by_id[b], _canon_port(idx.by_id[b], bp)) if bp else [None]
+            for i, x in enumerate(aps):
+                y = bps[i] if len(bps) == len(aps) else (bps[0] if len(aps) == 1 and len(bps) == 1 else None)
+                ls.add(a, x, b, y, "mac", "MAC address table")
 
     # 4. descriptions (config description, then LM ifAlias)
     for d in devices:
@@ -269,7 +290,7 @@ def _vlans_of(dev: SwitchConfig, port_name: str | None, by_id: dict) -> tuple[se
 
 
 def build_topology(devices: list[SwitchConfig], links: list[dict], rows: list[dict],
-                   summaries: list[dict]) -> dict:
+                   summaries: list[dict], port_macs: dict | None = None) -> dict:
     by_id = {d.switch_id: d for d in devices}
     row_by_port = {(r["switch_id"], normalise_ifname(r["port"])): r for r in rows if r["in_config"]}
     summ = {s["switch_id"]: s for s in summaries}
@@ -328,7 +349,7 @@ def build_topology(devices: list[SwitchConfig], links: list[dict], rows: list[di
         palette = {v: {"light": PALETTE_LIGHT[i], "dark": PALETTE_DARK[i]} for i, v in enumerate(top)}
         sites[site] = {
             "devices": [_device_view(by_id[i], tiers.get(i, 0), i not in members, summ.get(i, {}),
-                                     row_by_port) for i in sorted(ids)],
+                                     row_by_port, port_macs or {}) for i in sorted(ids)],
             "links": site_links,
             "vlans": [{"id": v, "name": vlan_names.get(v, ""), "ports": vlan_counts[v],
                        "color": palette.get(v)} for v in sorted(vlan_counts, key=_vkey)],
@@ -376,7 +397,7 @@ def _tiers(ids: set[str], links: list[dict], by_id) -> dict[str, int]:
     return tier
 
 
-def _device_view(d: SwitchConfig, tier: int, external: bool, summary: dict, row_by_port) -> dict:
+def _device_view(d: SwitchConfig, tier: int, external: bool, summary: dict, row_by_port, port_macs) -> dict:
     ports = []
     for p in d.ports:
         r = row_by_port.get((d.switch_id, p.key), {})
@@ -387,6 +408,7 @@ def _device_view(d: SwitchConfig, tier: int, external: bool, summary: dict, row_
                       "ip": p.ip, "vlans": sorted(vl, key=_vkey), "all_vlans": all_flag,
                       "admin_down": p.admin_down, "lm_oper": r.get("lm_oper"),
                       "lm_alias": r.get("lm_alias", ""),
+                      "macs": sorted(port_macs.get((d.switch_id, p.key), [])),
                       "issues": [i["text"] for i in r.get("issues", []) if i["level"] == "warn"]})
     return {"id": d.switch_id, "hostname": d.hostname, "role": d.role, "vendor": d.vendor,
             "serial": d.serial, "tier": tier, "external": external, "site": d.site,

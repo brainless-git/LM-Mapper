@@ -30,7 +30,7 @@ def _ints(text: str) -> list[int]:
 UI_FIELDS = {
     "lm_company": str, "lm_bearer_token": str, "lm_access_id": str, "lm_access_key": str,
     "lm_group_ids": list, "include_subgroups": bool, "hide_unmatched": bool,
-    "lm_device_filter": str, "config_source": str, "fetch_status": bool, "fetch_alerts": bool, "refresh_minutes": int,
+    "lm_device_filter": str, "config_source": str, "collector_snmp": bool, "snmp_cache_minutes": int, "fetch_status": bool, "fetch_alerts": bool, "refresh_minutes": int,
 }
 SECRET_FIELDS = {"lm_bearer_token", "lm_access_key"}
 
@@ -49,6 +49,9 @@ class Settings:
     lm_device_filter: str = field(default_factory=lambda: os.getenv("LM_DEVICE_FILTER", ""))
     # Where configs come from: files (CONFIG_DIR), lm (LogicMonitor ConfigSources) or both
     config_source: str = field(default_factory=lambda: os.getenv("CONFIG_SOURCE", "both").lower())
+    # LLDP + MAC tables via collector debug '!snmpwalk' (needs collector debug permission)
+    collector_snmp: bool = field(default_factory=lambda: _bool("LM_COLLECTOR_SNMP", False))
+    snmp_cache_minutes: int = field(default_factory=lambda: int(os.getenv("SNMP_CACHE_MINUTES", "60")))
     lm_configsource_regex: str = field(default_factory=lambda: os.getenv("LM_CONFIGSOURCE_REGEX", ".*"))
     lm_config_instance_prefer: str = field(default_factory=lambda: os.getenv(
         "LM_CONFIG_INSTANCE_PREFER", r"running|full|show.?run|backup|config"))

@@ -359,3 +359,90 @@ def test_short_name_links(tmp_path):
     assert frozenset([("SVG-TUR-SW01", "47"), ("SVG-TUR-UTM01", None)]) in links
     assert len(topo["links"]) == 3
     assert rep.topology["sites"]["Other"]["links"] == []
+
+
+# -- collector SNMP: LLDP + MAC tables ------------------------------------------
+
+from app import lm_snmp
+
+
+def _walk(base, entries):
+    return "\n".join(f"{base}.{k} => {v}" for k, v in entries.items())
+
+
+def test_snmp_parsing_and_lldp():
+    out = _walk(lm_snmp.OIDS["lldpRemSysName"], {"0.48.1": "SVG-TUR-SW02", "0.47.3": "SVG-TUR-UTM01"})
+    rem = lm_snmp.parse_walk(out, lm_snmp.OIDS["lldpRemSysName"])
+    assert rem == {"0.48.1": "SVG-TUR-SW02", "0.47.3": "SVG-TUR-UTM01"}
+    walks = {"lldpRemSysName": rem,
+             "lldpRemPortId": {"0.48.1": "47", "0.47.3": "aa:bb:cc:dd:ee:ff"},
+             "lldpRemPortDesc": {"0.47.3": "internal1"},
+             "lldpLocPortId": {"48": "48", "47": "47"},
+             "ifName": {"47": "47", "48": "48"}}
+    l2 = lm_snmp.build_l2("SW01", walks)
+    assert ("48", "SVG-TUR-SW02", "47") in l2.lldp and ("47", "SVG-TUR-UTM01", "internal1") in l2.lldp
+    assert lm_snmp.norm_mac("9cdc.7125.8a3c") == "9c:dc:71:25:8a:3c"
+    assert lm_snmp.norm_mac("Hex-STRING: 9C DC 71 25 8A 3C".split(": ")[1]) == "9c:dc:71:25:8a:3c"
+
+
+def _l2(sid, own, fdb):
+    d = lm_snmp.DeviceL2(device_id=sid, own_macs=set(own))
+    d.fdb = {p: set(m) for p, m in fdb.items()}
+    return d
+
+
+def test_mac_links_chain():
+    # FW --(47) SW1 (48)--(47) SW2 (46)--(23) SW8 ; host H on SW8 port 5
+    FW, S1, S2, S8, H = "02:00:00:00:00:fe", "02:00:00:00:00:01", "02:00:00:00:00:02", "02:00:00:00:00:08", "aa:00:00:00:00:99"
+    l2 = {
+        "FW": _l2("FW", [FW], {}),
+        "S1": _l2("S1", [S1], {"47": [FW], "48": [S2, S8, H]}),
+        "S2": _l2("S2", [S2], {"47": [S1, FW], "46": [S8, H]}),
+        "S8": _l2("S8", [S8], {"23": [S2, S1, FW], "5": [H]}),
+    }
+    links = {frozenset([(a, ap), (b, bp)]) for a, ap, b, bp in lm_snmp.mac_links(l2)}
+    assert links == {frozenset([("S1", "47"), ("FW", None)]),
+                     frozenset([("S1", "48"), ("S2", "47")]),
+                     frozenset([("S2", "46"), ("S8", "23")])}
+
+
+class FakeDebugLM(FakeLM):
+    def __init__(self):
+        self.cmds = []
+
+    def collector_debug(self, collector, cmd):
+        self.cmds.append(cmd)
+        host, oid = cmd.split()[1:]
+        if host == "10.0.99.2" and oid == lm_snmp.OIDS["lldpRemSysName"]:
+            return _walk(oid, {"0.10148.1": "CX-SW03.corp.local"})
+        if host == "10.0.99.2" and oid == lm_snmp.OIDS["lldpRemPortId"]:
+            return _walk(oid, {"0.10148.1": "1/1/49"})
+        if host == "10.0.99.2" and oid == lm_snmp.OIDS["ifName"]:
+            return _walk(oid, {"10148": "Gi1/0/48", "10101": "Gi1/0/1"})
+        if host == "10.0.99.2" and oid == lm_snmp.OIDS["qFdbPort"]:
+            return _walk(oid, {"10.170.0.0.0.0.153": "1"})           # aa:00:00:00:00:99 on bridge port 1
+        if host == "10.0.99.2" and oid == lm_snmp.OIDS["basePortIf"]:
+            return _walk(oid, {"1": "10101"})
+        return ""
+
+    def devices(self, f=""):
+        return [dict(d, currentCollectorId=7) for d in super().devices()]
+
+
+def test_collector_snmp_end_to_end(tmp_path):
+    s = Settings()
+    s.config_dir, s.mapping_file, s.data_dir = str(FIX), "/nonexistent", str(tmp_path)
+    s.collector_snmp, s.fetch_status = True, False
+    lm = FakeDebugLM()
+    rep = build_report(s, lm)
+    assert all(c.startswith("!snmpwalk ") for c in lm.cmds) and lm.cmds
+    row = next(r for r in rep.rows if r["switch"] == "CORE-SW01" and r["port"] == "GigabitEthernet1/0/1")
+    assert row["mac_count"] == 1 and row["macs"] == ["aa:00:00:00:00:99"]
+    link = next(l for l in rep.topology["sites"]["default"]["links"]
+                if {l["a_port"], l["b_port"]} == {"GigabitEthernet1/0/48", "1/1/49"})
+    assert "lldp" in link["sources"]
+    assert rep.snmp_stats["lldp_neighbours"] == 1
+    # cached: no new debug commands within the cache window
+    n = len(lm.cmds)
+    build_report(s, lm)
+    assert len(lm.cmds) == n

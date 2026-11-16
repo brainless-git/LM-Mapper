@@ -70,6 +70,19 @@
   </fieldset>
 
   <fieldset>
+    <legend>LLDP and MAC tables</legend>
+    <div class="field"><label for="collector_snmp">Walk LLDP and MAC tables via LM collectors</label>
+      <input type="checkbox" id="collector_snmp" {% if s.collector_snmp %}checked{% endif %}>
+      <span class="hint">Runs read-only <code>!snmpwalk</code> collector debug commands against each matched device, using the
+        SNMP credentials LogicMonitor already has. Finds links from LLDP neighbours and from MAC address tables, and shows the
+        MACs learned on each port. The LM API user needs permission to run collector debug commands. About 10 commands per
+        device; LM records them in its audit log.</span></div>
+    <div class="field"><label for="snmp_cache_minutes">Re-walk after (minutes)</label>
+      <input type="number" id="snmp_cache_minutes" min="0" value="{{ s.snmp_cache_minutes }}">
+      <span class="hint">Results are cached in /data. 0 = walk on every refresh.</span></div>
+  </fieldset>
+
+  <fieldset>
     <legend>Collection</legend>
     <div class="field"><label for="fetch_status">Fetch port status</label>
       <input type="checkbox" id="fetch_status" {% if s.fetch_status %}checked{% endif %}>
@@ -94,7 +107,8 @@ function values() {
     lm_company: $("lm_company").value, lm_bearer_token: $("lm_bearer_token").value,
     lm_access_id: $("lm_access_id").value, lm_access_key: $("lm_access_key").value,
     lm_group_ids: $("lm_group_ids").value, include_subgroups: $("include_subgroups").checked,
-    hide_unmatched: $("hide_unmatched").checked, config_source: $("config_source").value, lm_device_filter: $("lm_device_filter").value,
+    hide_unmatched: $("hide_unmatched").checked, config_source: $("config_source").value,
+    collector_snmp: $("collector_snmp").checked, snmp_cache_minutes: Number($("snmp_cache_minutes").value || 0), lm_device_filter: $("lm_device_filter").value,
     fetch_status: $("fetch_status").checked, fetch_alerts: $("fetch_alerts").checked,
     refresh_minutes: Number($("refresh_minutes").value || 0),
   };
