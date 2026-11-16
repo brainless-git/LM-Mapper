@@ -8,8 +8,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from .lm_client import LMClient
+from .lm_configs import fetch_lm_configs
 from .models import SwitchConfig, natural_key, normalise_ifname
-from .parsers import load_inventory
+from .parsers import Inventory, load_inventory
 from .topology import build_topology, discover_links
 from .settings import Settings
 
@@ -27,6 +28,7 @@ class Report:
     rows: list[dict] = field(default_factory=list)
     parse_errors: list[dict] = field(default_factory=list)
     topology: dict = field(default_factory=dict)
+    lm_config_stats: dict = field(default_factory=dict)
     neighbour_count: int = 0
     lm_errors: list[str] = field(default_factory=list)
 
@@ -99,19 +101,27 @@ def build_report(settings: Settings, client: LMClient | None) -> Report:
     t0 = time.time()
     settings.load_mapping()
     rep = Report()
-    inv = load_inventory(settings.config_dir, settings.vendor_overrides)
-    configs, rep.parse_errors = inv.devices, inv.errors
-    rep.neighbour_count = len(inv.neighbours)
+    if settings.config_source in ("files", "both"):
+        inv = load_inventory(settings.config_dir, settings.vendor_overrides)
+    else:
+        inv = Inventory()
+    rep.parse_errors = inv.errors
     ignore = settings.ignore_ports
 
     devices: list[dict] = []
+    site_by_device: dict[int, str] = {}
     if client is not None:
         try:
             if settings.lm_group_ids:
                 seen: dict = {}
                 for gid in settings.lm_group_ids:
+                    try:
+                        gname = client.group(gid).get("name") or str(gid)
+                    except Exception:
+                        gname = str(gid)
                     for d in client.group_devices(gid, settings.include_subgroups):
                         seen.setdefault(d["id"], d)
+                        site_by_device.setdefault(d["id"], gname)
                 devices = list(seen.values())
             else:
                 devices = client.devices(settings.lm_device_filter)
@@ -119,6 +129,22 @@ def build_report(settings: Settings, client: LMClient | None) -> Report:
             rep.lm_errors.append(f"Device list: {exc}")
     else:
         rep.lm_errors.append("LogicMonitor credentials not set; showing config only")
+
+    # Configs from LogicMonitor ConfigSources replace file configs for the same device
+    if client is not None and devices and settings.config_source in ("lm", "both"):
+        try:
+            lmc = fetch_lm_configs(client, devices, site_by_device, settings)
+            rep.lm_config_stats = {"devices": len(lmc.devices), "downloaded": lmc.fetched, "cached": lmc.cached}
+            rep.parse_errors.extend(lmc.errors)
+            lm_ids = {d.switch_id.lower() for d in lmc.devices} | {d.hostname.lower() for d in lmc.devices}
+            inv.devices = [d for d in inv.devices
+                           if d.switch_id.lower() not in lm_ids and d.hostname.lower() not in lm_ids] + lmc.devices
+            inv.neighbours.extend(lmc.neighbours)
+        except Exception as exc:
+            log.exception("LM config pull failed")
+            rep.lm_errors.append(f"LM configs: {exc}")
+    configs = inv.devices
+    rep.neighbour_count = len(inv.neighbours)
 
     index: dict[str, tuple[int, dict]] = {}
     by_id = {d["id"]: d for d in devices}
@@ -128,6 +154,8 @@ def build_report(settings: Settings, client: LMClient | None) -> Report:
                 index[k] = (prio, d)
 
     def match_device(sw: SwitchConfig) -> dict | None:
+        if sw.meta.get("lm_device_id") in by_id:          # config pulled from this LM device
+            return by_id[sw.meta["lm_device_id"]]
         for key in (sw.serial, sw.hostname):
             ov = settings.switch_overrides.get((key or "").lower())
             if ov:

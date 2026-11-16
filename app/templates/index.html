@@ -3,8 +3,12 @@
 {% if not company %}
 <div class="banner">LogicMonitor is not configured. <a href="/settings">Open Settings</a> to add the portal, Bearer token and target group IDs.</div>
 {% endif %}
+{% if report.lm_config_stats %}
+<p class="muted">LogicMonitor configs: {{ report.lm_config_stats.devices }} devices parsed
+  ({{ report.lm_config_stats.downloaded }} downloaded, {{ report.lm_config_stats.cached }} unchanged since last refresh).</p>
+{% endif %}
 {% if report.parse_errors %}
-<div class="banner err"><strong>Files that could not be parsed:</strong>
+<div class="banner err"><strong>Configs that could not be read:</strong>
   <ul>{% for e in report.parse_errors %}<li><code>{{ e.file }}</code>: {{ e.error }}</li>{% endfor %}</ul>
 </div>
 {% endif %}

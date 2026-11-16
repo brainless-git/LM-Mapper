@@ -216,6 +216,7 @@ def api_refresh():
 def api_switches():
     r = state.report
     return {"generated_at": r.generated_at, "duration_s": r.duration_s, "switches": r.switches,
+            "lm_config_stats": r.lm_config_stats,
             "parse_errors": r.parse_errors, "lm_errors": r.lm_errors}
 
 

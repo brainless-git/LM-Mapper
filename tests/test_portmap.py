@@ -261,3 +261,62 @@ def test_topology_and_settings_pages(monkeypatch, report, tmp_path):
         j = c.post("/api/settings", json={"lm_company": "acme", "lm_bearer_token": "secret-abcd1234",
                                           "lm_group_ids": "5"}).json()
         assert j["lm_group_ids"] == [5] and "secret" not in str(j)
+
+
+# -- LogicMonitor ConfigSource pull --------------------------------------------
+
+class FakeConfigLM(FakeGroupsLM):
+    """Device 3 'EDGE-SW02' with a ProCurve ConfigSource holding running + startup configs."""
+    calls = 0
+
+    def __init__(self, text):
+        self.text, self.version = text, 7
+
+    def devices(self, f=""):
+        return super().devices() + [{"id": 3, "displayName": "edge-sw02.site", "name": "10.0.99.4"}]
+
+    def group(self, gid):
+        return {"id": gid, "name": "St Agnes"}
+
+    def group_devices(self, gid, include_subgroups=True):
+        return [d for d in self.devices() if d["id"] == 3]
+
+    def paged(self, path, params=None):
+        if path.endswith("/devicedatasources") and 'CS' in (params or {}).get("filter", ""):
+            return iter([{"id": 300, "dataSourceName": "HP_Switch_Configs", "instanceNumber": 2}])
+        raise AssertionError(path)
+
+    def instances(self, dev_id, hds):
+        if hds == 300:
+            return [{"id": 1, "displayName": "startup-config"}, {"id": 2, "displayName": "running-config"}]
+        return super().instances(dev_id, hds)
+
+    def get(self, path, params=None):
+        assert path.endswith("/instances/2/config"), path       # startup-config is never read
+        FakeConfigLM.calls += 1
+        item = {"id": 99, "version": self.version}
+        if "config" in params["fields"].split(","):
+            item["config"] = self.text
+        return {"items": [item]}
+
+
+def test_pull_configs_from_lm(tmp_path):
+    text = (FIX / "edge-procurve.cfg").read_text().replace('"Desk 1"', '"Desk 1 LM"')
+    s = Settings()
+    s.config_dir, s.mapping_file, s.data_dir = str(FIX), "/nonexistent", str(tmp_path)
+    s.lm_group_ids, s.config_source, s.fetch_status, s.fetch_alerts = [3], "both", False, False
+    lm = FakeConfigLM(text)
+    rep = build_report(s, lm)
+    edge = [x for x in rep.switches if x["hostname"] == "EDGE-SW02"]
+    assert len(edge) == 1 and edge[0]["source_file"].startswith("LM:St Agnes/")
+    assert edge[0]["site"] == "St Agnes" and edge[0]["lm_device_id"] == 3
+    assert any(r["description"] == "Desk 1 LM" for r in rep.rows if r["switch"] == "EDGE-SW02")
+    assert rep.lm_config_stats == {"devices": 1, "downloaded": 1, "cached": 0}
+    assert list((tmp_path / "lm-configs").rglob("*.cfg"))
+    # second refresh: same version -> served from cache with only the small version check
+    FakeConfigLM.calls = 0
+    rep2 = build_report(s, lm)
+    assert rep2.lm_config_stats["cached"] == 1 and FakeConfigLM.calls == 1
+    # LM only: file configs are ignored
+    s.config_source = "lm"
+    assert [x["hostname"] for x in build_report(s, lm).switches] == ["EDGE-SW02"]

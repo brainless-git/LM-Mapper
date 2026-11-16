@@ -18,6 +18,19 @@ It only issues **GET** requests to LogicMonitor. It never writes to LM, switches
 - **Settings page:** LM portal, Bearer token (or LMv1 ID/key), and the LM device group IDs to
   ingest, with a group search. Saved to `/data/settings.json`.
 
+## Where configs come from
+
+Set on the Settings page (**Config source**) or with `CONFIG_SOURCE`:
+
+- **LogicMonitor ConfigSources** (LM Config). For every LM device in the selected groups the app
+  lists its ConfigSources, picks the instance holding the running/full config (names matching
+  `running|full|show run|backup|config`, skipping `startup|version|inventory|…`), and reads the
+  newest version. Downloads are cached in `/data/lm-configs` by version, so a refresh only
+  re-downloads configs that changed. Devices are grouped into sites by the group ID they were
+  selected through.
+- **Config folder** (`/configs`), one subfolder per site.
+- **Both** (default). If a device appears in both, the LogicMonitor config wins.
+
 ## Supported configs
 
 | Platform | Detected by | Parsed |
@@ -110,6 +123,11 @@ Settings saved on the Settings page override these.
 | `LM_INCLUDE_SUBGROUPS` | `true` | Walk subgroups of the selected groups |
 | `HIDE_UNMATCHED` | `false` | Hide configs not matched in the selected groups |
 | `LM_DEVICE_FILTER` | | LM REST filter, used only when no groups are set |
+| `CONFIG_SOURCE` | `both` | `lm`, `files` or `both` |
+| `LM_CONFIGSOURCE_REGEX` | `.*` | Only use ConfigSources whose name matches |
+| `LM_CONFIG_INSTANCE_PREFER` | `running\|full\|show.?run\|backup\|config` | Preferred ConfigSource instance names |
+| `LM_CONFIG_INSTANCE_EXCLUDE` | `startup\|version\|inventory\|licen[cs]e\|hardware\|log\|diff` | Instance names never used |
+| `LM_CONFIG_MAX_DEVICES` | `500` | Safety cap on devices checked for configs per refresh |
 | `LM_INTERFACE_DATASOURCES` | `^SNMP_Network_Interfaces$,^snmp64_If-?$,Interfaces,FortiSwitch.*Port` | Ordered regexes for the interface DataSource |
 | `LM_NAME_PROPERTIES` | `auto.interface.name,auto.interface.description,auto.interface.ifname` | Instance properties holding ifName / ifDescr |
 | `LM_ALIAS_PROPERTIES` | `auto.interface.alias,auto.interface.ifalias` | Instance property holding ifAlias |

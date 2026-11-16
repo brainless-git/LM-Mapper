@@ -57,6 +57,19 @@
   </fieldset>
 
   <fieldset>
+    <legend>Config source</legend>
+    <div class="field"><label for="config_source">Read configs from</label>
+      <select id="config_source">
+        <option value="both" {% if s.config_source == 'both' %}selected{% endif %}>LogicMonitor ConfigSources and config folder</option>
+        <option value="lm" {% if s.config_source == 'lm' %}selected{% endif %}>LogicMonitor ConfigSources only</option>
+        <option value="files" {% if s.config_source == 'files' %}selected{% endif %}>Config folder only</option>
+      </select>
+      <span class="hint">LogicMonitor configs come from LM Config (ConfigSources) on the devices in the selected groups.
+        The newest version is cached in /data and only re-downloaded when it changes. If a device is in both,
+        the LogicMonitor config wins. LM devices are grouped into sites by the group ID they were selected through.</span></div>
+  </fieldset>
+
+  <fieldset>
     <legend>Collection</legend>
     <div class="field"><label for="fetch_status">Fetch port status</label>
       <input type="checkbox" id="fetch_status" {% if s.fetch_status %}checked{% endif %}>
@@ -81,7 +94,7 @@ function values() {
     lm_company: $("lm_company").value, lm_bearer_token: $("lm_bearer_token").value,
     lm_access_id: $("lm_access_id").value, lm_access_key: $("lm_access_key").value,
     lm_group_ids: $("lm_group_ids").value, include_subgroups: $("include_subgroups").checked,
-    hide_unmatched: $("hide_unmatched").checked, lm_device_filter: $("lm_device_filter").value,
+    hide_unmatched: $("hide_unmatched").checked, config_source: $("config_source").value, lm_device_filter: $("lm_device_filter").value,
     fetch_status: $("fetch_status").checked, fetch_alerts: $("fetch_alerts").checked,
     refresh_minutes: Number($("refresh_minutes").value || 0),
   };

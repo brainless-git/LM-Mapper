@@ -30,7 +30,7 @@ def _ints(text: str) -> list[int]:
 UI_FIELDS = {
     "lm_company": str, "lm_bearer_token": str, "lm_access_id": str, "lm_access_key": str,
     "lm_group_ids": list, "include_subgroups": bool, "hide_unmatched": bool,
-    "lm_device_filter": str, "fetch_status": bool, "fetch_alerts": bool, "refresh_minutes": int,
+    "lm_device_filter": str, "config_source": str, "fetch_status": bool, "fetch_alerts": bool, "refresh_minutes": int,
 }
 SECRET_FIELDS = {"lm_bearer_token", "lm_access_key"}
 
@@ -47,6 +47,14 @@ class Settings:
     # Hide config devices that do not match an LM device in the selected groups
     hide_unmatched: bool = field(default_factory=lambda: _bool("HIDE_UNMATCHED", False))
     lm_device_filter: str = field(default_factory=lambda: os.getenv("LM_DEVICE_FILTER", ""))
+    # Where configs come from: files (CONFIG_DIR), lm (LogicMonitor ConfigSources) or both
+    config_source: str = field(default_factory=lambda: os.getenv("CONFIG_SOURCE", "both").lower())
+    lm_configsource_regex: str = field(default_factory=lambda: os.getenv("LM_CONFIGSOURCE_REGEX", ".*"))
+    lm_config_instance_prefer: str = field(default_factory=lambda: os.getenv(
+        "LM_CONFIG_INSTANCE_PREFER", r"running|full|show.?run|backup|config"))
+    lm_config_instance_exclude: str = field(default_factory=lambda: os.getenv(
+        "LM_CONFIG_INSTANCE_EXCLUDE", r"startup|version|inventory|licen[cs]e|hardware|log|diff"))
+    lm_config_max_devices: int = field(default_factory=lambda: int(os.getenv("LM_CONFIG_MAX_DEVICES", "500")))
     interface_datasources: list[str] = field(default_factory=lambda: _list(
         "LM_INTERFACE_DATASOURCES", r"^SNMP_Network_Interfaces$,^snmp64_If-?$,Interfaces,FortiSwitch.*Port"))
     status_datapoints: list[str] = field(default_factory=lambda: _list(
@@ -95,6 +103,8 @@ class Settings:
                 v = bool(v)
             elif typ is int:
                 v = int(v or 0)
+            elif k == "config_source":
+                v = str(v).lower() if str(v).lower() in ("files", "lm", "both") else "both"
             elif typ is list:
                 v = _ints(",".join(map(str, v)) if isinstance(v, list) else v)
             else:
