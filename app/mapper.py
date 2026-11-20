@@ -31,6 +31,7 @@ class Report:
     topology: dict = field(default_factory=dict)
     lm_config_stats: dict = field(default_factory=dict)
     snmp_stats: dict = field(default_factory=dict)
+    lm_config_diag: list = field(default_factory=list)
     neighbour_count: int = 0
     lm_errors: list[str] = field(default_factory=list)
 
@@ -136,7 +137,9 @@ def build_report(settings: Settings, client: LMClient | None) -> Report:
     if client is not None and devices and settings.config_source in ("lm", "both"):
         try:
             lmc = fetch_lm_configs(client, devices, site_by_device, settings)
-            rep.lm_config_stats = {"devices": len(lmc.devices), "downloaded": lmc.fetched, "cached": lmc.cached}
+            rep.lm_config_stats = {"devices": len(lmc.devices), "downloaded": lmc.fetched, "cached": lmc.cached,
+                                   "in_scope": len(devices)}
+            rep.lm_config_diag = sorted(lmc.diag, key=lambda d: d["device"].lower())
             rep.parse_errors.extend(lmc.errors)
             lm_ids = {d.switch_id.lower() for d in lmc.devices} | {d.hostname.lower() for d in lmc.devices}
             inv.devices = [d for d in inv.devices

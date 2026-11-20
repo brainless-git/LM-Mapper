@@ -8,9 +8,16 @@ from ..models import Port, SwitchConfig, compress_vlans, expand_vlan_list
 SKIP_PREFIXES = ("vlan", "loopback", "null", "tunnel", "bdi", "nve")
 
 
+IF_RX = (r"^interface\s+(?:gigabitethernet|fastethernet|tengigabitethernet|twentyfivegige|fortygigabitethernet|"
+         r"hundredgige|twogigabitethernet|fivegigabitethernet|appgigabitethernet|ethernet|port-channel|"
+         r"gi|fa|te|tw|fo|hu|eth|po)\s?\d")
+
+
 def detect(text: str) -> bool:
-    return bool(re.search(r"^interface (Gigabit|FastEthernet|TenGigabit|TwentyFive|Ethernet|Port-channel)", text, re.M)
-                and re.search(r"^(version \d|hostname \S)", text, re.M))
+    """IOS, IOS-XE, NX-OS and Cisco Business (CBS/SG) running-configs."""
+    return bool(re.search(IF_RX, text, re.M | re.I)
+                and re.search(r"^\s*(version \d|hostname \S|!command: show running-config|"
+                              r"config-file-header|building configuration)", text, re.M | re.I))
 
 
 def parse(text: str, source_file: str) -> list[SwitchConfig]:
@@ -43,7 +50,7 @@ def parse(text: str, source_file: str) -> list[SwitchConfig]:
         if not line.startswith(" "):           # top-level statement
             close_interface()
             block = None
-            m = re.match(r"^hostname (\S+)", line)
+            m = re.match(r"^hostname \"?([^\"\s]+)", line)
             if m:
                 hostname = m.group(1)
                 continue
@@ -52,9 +59,9 @@ def parse(text: str, source_file: str) -> list[SwitchConfig]:
                 block, current_vlan = "vlan", m.group(1)
                 vlans.setdefault(current_vlan, "")
                 continue
-            m = re.match(r"^interface (\S+)", line)
+            m = re.match(r"^interface\s+(\S+(?:\s\d\S*)?)", line, re.I)
             if m:
-                name = m.group(1)
+                name = m.group(1).replace(" ", "")
                 if name.lower().startswith(SKIP_PREFIXES):
                     block = "skip"
                 else:
@@ -77,15 +84,26 @@ def parse(text: str, source_file: str) -> list[SwitchConfig]:
 
 def _apply_interface_line(p: Port, s: str, allowed: list[str]) -> None:
     if s.startswith("description "):
-        p.description = s[12:].strip()
+        p.description = s[12:].strip().strip('"')
     elif s == "shutdown":
         p.admin_down = True
     elif s == "no shutdown":
         p.admin_down = False
     elif s == "switchport mode access":
         p.mode = "access"
-    elif s == "switchport mode trunk":
+    elif s in ("switchport mode trunk", "switchport mode general"):
         p.mode = "trunk"
+    elif s.startswith("switchport general allowed vlan add "):      # Cisco Business: '... add 10,20 tagged'
+        rest = s[len("switchport general allowed vlan add "):].split()
+        vl = expand_vlan_list(rest[0]) if rest else []
+        if len(rest) > 1 and rest[1] == "untagged" and len(vl) == 1:
+            p.native_vlan = vl[0]
+        else:
+            allowed.extend(vl)
+    elif s.startswith("switchport general pvid "):
+        p.native_vlan = s.split()[-1]
+    elif s.startswith("switchport trunk native vlan ") or s.startswith("switchport trunk native-vlan "):
+        p.native_vlan = s.split()[-1]
     elif s == "no switchport":
         p.mode = "routed"
     elif s.startswith("ip address ") and len(s.split()) >= 4:
@@ -97,8 +115,6 @@ def _apply_interface_line(p: Port, s: str, allowed: list[str]) -> None:
             p.mode = "access"
     elif s.startswith("switchport voice vlan "):
         p.voice_vlan = s.split()[-1]
-    elif s.startswith("switchport trunk native vlan "):
-        p.native_vlan = s.split()[-1]
     elif s.startswith("switchport trunk allowed vlan add "):
         allowed.extend(expand_vlan_list(s[len("switchport trunk allowed vlan add "):]))
     elif s.startswith("switchport trunk allowed vlan remove "):
@@ -106,7 +122,7 @@ def _apply_interface_line(p: Port, s: str, allowed: list[str]) -> None:
         allowed[:] = [v for v in allowed if v not in rm]
     elif s.startswith("switchport trunk allowed vlan "):
         allowed[:] = expand_vlan_list(s[len("switchport trunk allowed vlan "):])
-    elif s.startswith("channel-group "):
+    elif s.startswith("channel-group ") and s.split()[1].isdigit():
         p.lag = "Po" + s.split()[1]
 
 

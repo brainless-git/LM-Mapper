@@ -17,7 +17,8 @@ from ..models import Port, SwitchConfig, compress_vlans
 def detect(text: str) -> bool:
     return bool(re.search(r"^#config-version=(FGT|FG|FS|FWF)", text, re.M)
                 or re.search(r"^config switch-controller managed-switch", text, re.M)
-                or re.search(r"^config firewall policy", text, re.M)
+                or re.search(r"^\s*config firewall policy", text, re.M)
+                or re.search(r"^config (global|vdom)\s*$", text, re.M)
                 or re.search(r"^config switch (interface|physical-port)", text, re.M))
 
 
@@ -66,6 +67,33 @@ def parse_tree(text: str) -> Node:
     return root
 
 
+def _merge(dst: Node, src: Node) -> None:
+    for k, v in src.items():
+        if k in dst and isinstance(dst[k], Node):
+            dst[k].settings.update(v.settings)
+            _merge(dst[k], v)
+        else:
+            dst[k] = v
+
+
+def flatten_vdoms(tree: Node) -> Node:
+    """Multi-VDOM configs wrap everything in 'config global' and 'config vdom / edit <name>'.
+    Lift both to the top level so the rest of the parser sees a single-VDOM layout.
+    (The first 'config vdom' block in a backup only lists VDOM names; later ones hold settings.)"""
+    if "global" not in tree and "vdom" not in tree:
+        return tree
+    flat = Node()
+    flat.settings.update(tree.settings)
+    for k, v in tree.items():
+        if k not in ("global", "vdom"):
+            flat[k] = v
+    if "global" in tree:
+        _merge(flat, tree["global"])
+    for vd in (tree.get("vdom") or {}).values():
+        _merge(flat, vd)
+    return flat
+
+
 def _is_fortiswitch(text: str, tree: Node) -> bool:
     m = re.search(r"^#config-version=(\w+)", text, re.M)
     if m:
@@ -75,7 +103,7 @@ def _is_fortiswitch(text: str, tree: Node) -> bool:
 
 
 def parse(text: str, source_file: str) -> list[SwitchConfig]:
-    tree = parse_tree(text)
+    tree = flatten_vdoms(parse_tree(text))
     if _is_fortiswitch(text, tree):
         return _parse_fortiswitch(tree, source_file)
     return _parse_fortigate(tree, source_file)

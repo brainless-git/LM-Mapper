@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Config sources · Switchport Map{% endblock %}
+{% block crumbs %}<span class="muted">/ Config sources</span>{% endblock %}
+{% block content %}
+<p class="muted">Every LogicMonitor device in the selected groups, the ConfigSources LogicMonitor has for it, and what
+  the app did with them. Instances marked "excluded" match <code>LM_CONFIG_INSTANCE_EXCLUDE</code>.</p>
+<div class="toolbar">
+  <input type="search" placeholder="Filter devices…" oninput="filterRows(this, document.getElementById('only'))">
+  <label><input type="checkbox" id="only" onchange="filterRows(document.querySelector('input[type=search]'), this)"> Not parsed only</label>
+  <a class="btn" href="/api/lm-configs">JSON</a>
+</div>
+<table>
+  <thead><tr><th>LM device</th><th>Site</th><th>ConfigSources and instances</th><th>Tried</th><th>Result</th></tr></thead>
+  <tbody>
+  {% for d in diag %}
+    <tr data-issues="{{ 0 if d.vendor else 1 }}">
+      <td>{{ d.device }} <span class="muted">#{{ d.lm_id }}</span></td>
+      <td>{{ d.site }}</td>
+      <td>{% for cs in d.configsources %}<div><strong>{{ cs.name }}</strong>{% if cs.skipped %} <span class="muted">({{ cs.skipped }})</span>{% endif %}:
+            {{ cs.instances | join(", ") or "no instances" }}</div>{% else %}<span class="muted">none</span>{% endfor %}</td>
+      <td>{% for t in d.tried %}<div>{{ t.configsource }} / {{ t.instance }}: {{ t.result }}{% if t.first_line %}
+            <br><code class="muted">{{ t.first_line }}</code>{% endif %}</div>{% endfor %}</td>
+      <td class="{{ 'up' if d.vendor else 'warn' }}">{{ d.outcome or ("parsed (" ~ d.vendor ~ ")" if d.vendor else "") }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5" class="muted">No LogicMonitor config pull has run. It needs LM credentials, group IDs and Config source set to include LogicMonitor.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

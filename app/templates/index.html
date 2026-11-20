@@ -4,8 +4,10 @@
 <div class="banner">LogicMonitor is not configured. <a href="/settings">Open Settings</a> to add the portal, Bearer token and target group IDs.</div>
 {% endif %}
 {% if report.lm_config_stats %}
-<p class="muted">LogicMonitor configs: {{ report.lm_config_stats.devices }} devices parsed
-  ({{ report.lm_config_stats.downloaded }} downloaded, {{ report.lm_config_stats.cached }} unchanged since last refresh).</p>
+{% set ok = report.lm_config_diag | selectattr("vendor") | list | length %}
+<p>LogicMonitor configs: <strong>{{ ok }} of {{ report.lm_config_diag | length }}</strong> devices in scope gave a usable config
+  ({{ report.lm_config_stats.downloaded }} downloaded, {{ report.lm_config_stats.cached }} unchanged since last refresh).
+  <a href="/lm-configs">See why for each device</a></p>
 {% endif %}
 {% if report.snmp_stats %}
 <p class="muted">Collector SNMP: {{ report.snmp_stats.devices }} devices walked, {{ report.snmp_stats.lldp_neighbours }} LLDP neighbours,

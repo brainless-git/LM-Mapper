@@ -130,6 +130,16 @@ def topology_page(request: Request, site: str | None = None):
     return templates.TemplateResponse(request, "topology.html", _ctx(request, sites=sites, site=site, data=data))
 
 
+@app.get("/lm-configs", response_class=HTMLResponse)
+def lm_configs_page(request: Request):
+    return templates.TemplateResponse(request, "lm_configs.html", _ctx(request, diag=state.report.lm_config_diag))
+
+
+@app.get("/api/lm-configs")
+def api_lm_configs():
+    return {"generated_at": state.report.generated_at, "devices": state.report.lm_config_diag}
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
     return templates.TemplateResponse(request, "settings.html", _ctx(request, s=settings.public()))

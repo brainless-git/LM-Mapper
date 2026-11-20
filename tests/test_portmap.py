@@ -311,7 +311,7 @@ def test_pull_configs_from_lm(tmp_path):
     assert len(edge) == 1 and edge[0]["source_file"].startswith("LM:St Agnes/")
     assert edge[0]["site"] == "St Agnes" and edge[0]["lm_device_id"] == 3
     assert any(r["description"] == "Desk 1 LM" for r in rep.rows if r["switch"] == "EDGE-SW02")
-    assert rep.lm_config_stats == {"devices": 1, "downloaded": 1, "cached": 0}
+    assert rep.lm_config_stats == {"devices": 1, "downloaded": 1, "cached": 0, "in_scope": 1}
     assert list((tmp_path / "lm-configs").rglob("*.cfg"))
     # second refresh: same version -> served from cache with only the small version check
     FakeConfigLM.calls = 0
@@ -446,3 +446,35 @@ def test_collector_snmp_end_to_end(tmp_path):
     n = len(lm.cmds)
     build_report(s, lm)
     assert len(lm.cmds) == n
+
+
+def test_lm_config_diag_and_vdom(tmp_path):
+    vdom_fgt = ('#config-version=FG100F-7.2.8:opmode=0:vdom=1\nconfig vdom\nedit root\nnext\nend\n'
+                'config global\nconfig system global\n    set hostname "EM-BNE-UTM01"\nend\n'
+                'config system interface\n    edit "port1"\n        set vdom "root"\n        set type physical\n    next\n'
+                '    edit "vl10"\n        set vdom "root"\n        set interface "port1"\n        set vlanid 10\n    next\nend\nend\n'
+                'config vdom\nedit root\nconfig firewall policy\nend\nnext\nend\n')
+
+    class LM(FakeConfigLM):
+        def devices(self, f=""):
+            return [{"id": 3, "displayName": "EM-BNE-UTM01", "name": "10.9.9.1"},
+                    {"id": 4, "displayName": "EM-BNE-SW01", "name": "10.9.9.2"}]
+
+        def group_devices(self, gid, include_subgroups=True):
+            return self.devices()
+
+        def paged(self, path, params=None):
+            if "/devices/4/" in path:
+                return iter([])                       # no ConfigSources on the switch
+            return super().paged(path, params)
+
+    s = Settings()
+    s.config_dir, s.mapping_file, s.data_dir = str(FIX), "/nonexistent", str(tmp_path)
+    s.lm_group_ids, s.config_source, s.fetch_status, s.fetch_alerts = [1], "lm", False, False
+    rep = build_report(s, LM(vdom_fgt))
+    fw = next(x for x in rep.switches if x["hostname"] == "EM-BNE-UTM01")
+    assert fw["port_count"] >= 2
+    diag = {d["device"]: d for d in rep.lm_config_diag}
+    assert diag["EM-BNE-UTM01"]["vendor"] == "fortios" and "parsed" in diag["EM-BNE-UTM01"]["outcome"]
+    assert diag["EM-BNE-UTM01"]["configsources"][0]["instances"] == ["startup-config (excluded)", "running-config"]
+    assert diag["EM-BNE-SW01"]["outcome"].startswith("no ConfigSources")
